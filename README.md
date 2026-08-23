@@ -3,7 +3,7 @@ A CLI based key/value secret manager that stores everything inside a simple file
 
 ## Features
 - Simple, Compack serialized `.sdb` file format.
-- Smaller, auditable codebase (~1800 LoC) with small amount of dependencies compared to alternatives using KDBX (kpcli is ~8000 LoC)
+- Smaller, auditable codebase (~2000 LoC) with small amount of dependencies compared to alternatives that use KDBX (kpcli is ~8000 LoC)
 - Strong cryptographic algorithms (xchacha20, aes-cbc-256, polysha, argon2id etc.)
 - MAC integrity check for the entire file (version, header, payload) using the provided hash algorithm.
 - Along with entire payload encryption, every secret value is encrypted individually and stay in memory encrypted.

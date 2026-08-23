@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/chzyer/readline"
@@ -487,6 +488,15 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 
 		} else { return []byte{}, errors.New("Invalid arguments. Usage: ls <?dir>") }
 
+		// Sort the dirs slice
+		sort.Slice(dirs, func(i, j int) bool {
+			return dirs[i] < dirs[j]
+		})
+		// Sort the entries slice
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i] < entries[j]
+		})
+
 		var s bytes.Buffer
 		for _,dir := range dirs {
 			s.WriteString(dir)
@@ -512,6 +522,11 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 			if err != nil { return []byte{}, err }
 
 		} else { return []byte{}, errors.New("Invalid arguments. Usage: lsall <?dir>") }
+
+		// Sort the entries slice
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i] < entries[j]
+		})
 
 		var s bytes.Buffer
 		for _,entry := range entries {
