@@ -1,4 +1,4 @@
-module github.com/zenarvus/gosecrets
+module github.com/zenarvus/sec2m-go
 
 go 1.26.3
 

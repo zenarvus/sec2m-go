@@ -39,7 +39,7 @@ import (
 	"golang.org/x/crypto/chacha20"
 
 	"github.com/zenarvus/compack/go"
-	"github.com/zenarvus/gosecrets/platforms"
+	"github.com/zenarvus/sec2m-go/platforms"
 	"github.com/zenarvus/polyformats/polysha/go"
 	"golang.org/x/crypto/argon2"
 )

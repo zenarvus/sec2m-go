@@ -27,8 +27,8 @@ import (
 	"strings"
 
 	"github.com/chzyer/readline"
-	"github.com/zenarvus/gosecrets/core"
-	"github.com/zenarvus/gosecrets/platforms"
+	"github.com/zenarvus/sec2m-go/core"
+	"github.com/zenarvus/sec2m-go/platforms"
 	"golang.org/x/term"
 )
 
