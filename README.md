@@ -2,7 +2,7 @@
 A CLI based key/value secret manager that stores everything inside a simple file formatted with compack.
 
 ## Features
-- Simple, Compack formatted file structure.
+- Simple, Compack serialized `.sdb` file format.
 - Smaller, auditable codebase (~1800 LoC) with small amount of dependencies compared to alternatives using KDBX (kpcli is ~8000 LoC)
 - Strong cryptographic algorithms (xchacha20, aes-cbc-256, polysha, argon2id etc.)
 - MAC integrity check for the entire file (version, header, payload) using the provided hash algorithm.
@@ -50,7 +50,7 @@ Signature = HashMAC(MessageAuthenticationCodeKey, Version, Header, EncryptedBody
 ## Commands
 
 ```
-Usage: VAULT=/path/to/file gosecrets <command> [args]
+Usage: VAULT=/path/to/file gosecrets <command> [args...]
 
 === MAIN COMMANDS ===
 init <dalg> <ealg> <halg>   - Init the vault file in VAULT location
@@ -61,7 +61,7 @@ info                        - Print non-critical info about the vault: headers, 
 
 === ALGORITHMS ===
 Key Derivation (<dalg>):
-  - argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters. <slen> is the length of the salt, <iter> is the amount of iterations, <mem> is the required memory in bytes and <thread> is the amount of threads it will run. Recommended: <slen:16>, <iter:4>, <mem:256>, <thread:2>
+  - argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters. <slen> is the length of the salt, <iter> is the amount of iterations, <mem> is the required memory in megabytes and <thread> is the amount of threads it will run. Recommended: <slen:16>, <iter:4>, <mem:256>, <thread:2>
 
 Symmetric Encryption (<ealg>):
   - aes-cbc-256: AES-256 with CBC mode
@@ -81,7 +81,8 @@ get <key>      - Get the value of a key in path
 rm <key>       - Delete a key from the vault
 rmd <dir>      - Delete a directory from the vault
 mv <old> <new> - Rename a key in the vault
-exec <args>    - Execute a command from the system
+exec <args...> - Execute a system binary with given arguments
+iter <cmds>    - Execute a sec2m shell pipeline commandlist passed in a quoted argument
 
 ls <?dir>      - Print the items in the path in vault
 cd <?dir>      - Change the current directory to the given path in vault

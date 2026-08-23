@@ -33,7 +33,7 @@ import (
 )
 
 func printMainHelp() {
-	fmt.Println("Usage: VAULT=/path/to/file gosecrets <command> [args]")
+	fmt.Println("Usage: VAULT=/path/to/file gosecrets <command> [args...]")
 	fmt.Println()
 	fmt.Println("=== MAIN COMMANDS ===")
 	fmt.Println("init <dalg> <ealg> <halg>   - Init the vault file in VAULT location")
@@ -44,7 +44,7 @@ func printMainHelp() {
 	fmt.Println()
 	fmt.Println("=== ALGORITHMS ===")
 	fmt.Println("Key Derivation (<dalg>):")
-	fmt.Println("  - argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters. <slen> is the length of the salt, <iter> is the amount of iterations, <mem> is the required memory in bytes and <thread> is the amount of threads it will run. Recommended: <slen:16>, <iter:4>, <mem:256>, <thread:2>")
+	fmt.Println("  - argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters. <slen> is the length of the salt, <iter> is the amount of iterations, <mem> is the required memory in megabytes and <thread> is the amount of threads it will run. Recommended: <slen:16>, <iter:4>, <mem:256>, <thread:2>")
 	fmt.Println()
 	fmt.Println("Symmetric Encryption (<ealg>):")
 	fmt.Println("  - aes-cbc-256: AES-256 with CBC mode")
@@ -58,7 +58,7 @@ func printMainHelp() {
 	fmt.Println("  - blake3-256: 32 byte blake3")
 }
 func printShellHelp() {
-	fmt.Println("Usage: <command> [args]")
+	fmt.Println("Usage: <command> [args...]")
 	fmt.Println()
 	fmt.Println("=== SHELL ===")
 	fmt.Println("help - Write this output")
@@ -72,7 +72,8 @@ func printCommonHelp() {
 	fmt.Println("rm <key>       - Delete a key from the vault")
 	fmt.Println("rmd <dir>      - Delete a directory from the vault")
 	fmt.Println("mv <old> <new> - Rename a key in the vault")
-	fmt.Println("exec <args>    - Execute a command from the system")
+	fmt.Println("exec <args...> - Execute a system binary with given arguments")
+	fmt.Println("iter <cmds>    - Execute a sec2m shell pipeline commandlist passed in a quoted argument")
 	fmt.Println()
 	fmt.Println("ls <?dir>      - Print the items in the path in vault")
 	fmt.Println("cd <?dir>      - Change the current directory to the given path in vault")
@@ -285,6 +286,7 @@ func startShell(sess *core.Session) error {
 		if err != nil { fmt.Println(err); continue }
 
 		fmt.Printf("%s\n", result)
+		core.ZeroBytes(result) // Clean the result from memory after printing
 		
 	}
 }
@@ -331,7 +333,6 @@ func processCommandlist(sess *core.Session, args []string) ([]byte, error) {
 
 	return result, nil
 }
-
 
 // Process command processes the given command and return the stdout
 func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCommand bool) ([]byte, error) {
@@ -565,6 +566,16 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
     	if err != nil { return outBuf.Bytes(), err } // Return both the captured output and the error
 
 		return outBuf.Bytes(), nil
+	case "iter":
+		if len(args) < 2 { return []byte{}, errors.New("Invalid arguments. Usage: iter 'piped | command-list'") }
+
+		iterArgs,err := parseArgs(args[1])
+		if err != nil {return []byte{}, err}
+
+		result, err := processCommandlist(sess, iterArgs)
+		if err != nil {return []byte{}, err}
+
+		return result, nil
 
 	default:
 		shortcutVal := shortcuts[args[0]]
@@ -600,7 +611,7 @@ func getShortcuts(sess *core.Session) (map[string][]byte) {
 		if strings.HasPrefix(key, "/.shortcut/") {
 			shortcut,_ := strings.CutPrefix(key, "/.shortcut/")
 			if !strings.Contains(shortcut, "/") {
-				shortcutVal, _ := sess.Get(shortcut)
+				shortcutVal, _ := sess.Get(key)
 				shortcuts[shortcut] = shortcutVal
 			}
 		}
@@ -614,6 +625,10 @@ func getVaultPath() string {
 	vaultPath := os.Getenv("VAULT")
 	if vaultPath == "" {
 		fmt.Println("VAULT environment variable is not set.")
+		os.Exit(1)
+	}
+	if !strings.HasSuffix(vaultPath, ".sdb") {
+		fmt.Println("Vault must contain '.sdb' at the end.")
 		os.Exit(1)
 	}
 	return vaultPath

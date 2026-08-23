@@ -1,5 +1,5 @@
 /*
-gosecrets: CLI based secrets manager
+sec2m-go: CLI based secrets manager
 Copyright (C) 2026  zenarvus (rem)
 
 This program is free software: you can redistribute it and/or modify
@@ -39,8 +39,8 @@ import (
 	"golang.org/x/crypto/chacha20"
 
 	"github.com/zenarvus/compack/go"
-	"github.com/zenarvus/sec2m-go/platforms"
 	"github.com/zenarvus/polyformats/polysha/go"
+	"github.com/zenarvus/sec2m-go/platforms"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -109,7 +109,7 @@ type Entry struct {
 }
 type Argon2IDParams struct {
 	Iterations uint32 `cmpck:"1"`
-	Memory uint32 `cmpc:"2"` // In megabytes! Multiply with 1024 to get kilobytes
+	Memory uint32 `cmpc:"2"` // In megabytes! Multiply with 1024 to get kilobytes for argon2id
 	Threads uint32 `cmpck:"3"`
 }
 
@@ -158,7 +158,7 @@ func InitSession(
 	password []byte,
 	kdAlgoStr, seAlgoStr, hashAlgoStr string,
 ) (*Session, error) {
-	// Try to create a lock file. Exit if it exists or gives an another error.
+	// Try to create a lock file. Exit if it already exists or gives an error.
 	file, err := os.OpenFile(filepath+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		if os.IsExist(err) { return nil, errors.New("a lock file for this vault already exists") }
@@ -349,7 +349,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 		sess.Destroy()
 		return nil, err
 	}
-	defer ZeroBytes(unencryptedBodyBytes)
+	// defer ZeroBytes(unencryptedBodyBytes) -> Compack uses bytes in here when parsing to structs. Deleting them will remove them from the struct fields too.
 
 	var unencryptedBody UnencryptedBody 
 	err = cmpck.Unmarshal(unencryptedBodyBytes, &unencryptedBody)
@@ -499,7 +499,8 @@ func (s *Session) SaveAs(filepath string) error {
 
 	var fileStruct = &File{}
 
-	var unencryptedBody = &UnencryptedBody{ Entries: make([]Entry, len(s.EntryMap)) }
+	// Create an unencryptedBody with len(s.EntryMap) capacity
+	var unencryptedBody = &UnencryptedBody{ Entries: make([]Entry, 0, len(s.EntryMap)) }
 	for _,entry := range s.EntryMap {
 		unencryptedBody.Entries = append(unencryptedBody.Entries, *entry)
 	}
