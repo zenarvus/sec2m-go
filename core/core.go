@@ -24,10 +24,10 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -86,7 +86,7 @@ type File struct {
 	Version uint64 `cmpck:"1"` // Version of the file.
 	Header []byte `cmpck:"2"` // Info about the version of the database, algorithms used etc.
 	Body []byte `cmpck:"3"` // The actual encrypted entries list.
-	Signature []byte `cmpck:"4"` // The MAC signature of the version, header and body.
+	Signature []byte `cmpck:"4"` // The HMAC signature of the version, header and body.
 }
 type UnmarshaledHeader struct {
 	KDAlgo uint64 `cmpck:"1"` // The key derivation algorithm used to hash the password. Like argon2id.
@@ -997,7 +997,7 @@ func unencryptData(ciphertext []byte, iv_nonce []byte, enckey []byte, algorithm 
 	}
 }
 
-// Computes the MAC signature of the version, header and body.
+// Computes the HMAC signature of the version, header and body using the given hash algorithm.
 func computeSignature(
 	polyShaAlgo polysha.SHAType, encKey []byte,
 	version uint64, headerBytes []byte, bodyBytes []byte,
@@ -1006,30 +1006,15 @@ func computeSignature(
 	canonicalBytes, err := cmpck.Marshal(File{Version:version, Header:headerBytes, Body:bodyBytes}, cmpck.EncOpts{Canonical:true})
 	if err != nil {return nil, err}
 
-	switch polyShaAlgo {
-	// These algorithms are resistant against length extension. We can directly do H(encKey || message)
-	case polysha.TYPE_BLAKE3_256, polysha.TYPE_SHA3_256, polysha.TYPE_SHA3_384, polysha.TYPE_SHA3_512:
-		var b bytes.Buffer
-
-		b.Write(encKey)
-		b.Write(canonicalBytes)
-
-		mac, err := polysha.HashRaw(polyShaAlgo, b.Bytes())
-		if err != nil {return nil, err}
-
-		return mac, nil
-	
-	// For SHA2-256, we use HMAC as it's vulnerable to length extension.
-	case polysha.TYPE_SHA2_256:
-		b := hmac.New(sha256.New, encKey)
-		_, err := b.Write(canonicalBytes)
-		if err != nil {return nil, err}
-
-		return b.Sum(nil), nil
-
-	default:
-		return nil, errors.New("Unsupported hash algorithm")
+	hashReturner := func() hash.Hash {
+		return polysha.NewRawHasher(polyShaAlgo)
 	}
+
+	b := hmac.New(hashReturner, encKey)
+	_, err = b.Write(canonicalBytes)
+	if err != nil {return nil, err}
+
+	return b.Sum(nil), nil
 }
 
 // ZeroBytes explicitly zeroes out sensitive memory slices
@@ -1077,5 +1062,4 @@ func getKeyDerivationParams(keyDerivationString string) (uint64, []byte, []byte,
 	} else {
 		return 0, nil, nil, errors.New("unsupported key derivation algorithm")
 	}
-
 }

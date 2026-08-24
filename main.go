@@ -34,13 +34,14 @@ import (
 )
 
 func printMainHelp() {
-	fmt.Println("Usage: VAULT=/path/to/file gosecrets <command> [args...]")
+	fmt.Println("Usage: VAULT=/path/to/file sec2m <command> [args...]")
 	fmt.Println()
 	fmt.Println("=== MAIN COMMANDS ===")
 	fmt.Println("init <dalg> <ealg> <halg>   - Init the vault file in VAULT location")
 	fmt.Println("change <dalg> <ealg> <halg> - Change the given vault's algorithms and password")
 	fmt.Println("help                        - Write this output")
-	fmt.Println("shell                       - Long lived gosecrets shell session you can execute commands")
+	fmt.Println("shell                       - Long lived sec2m shell session you can execute commands")
+	fmt.Println("shot <cmds>                 - Execute a sec2m shell pipeline command and exit")
 	fmt.Println("info                        - Print non-critical info about the vault: headers, shortcuts and entry-count.")
 	fmt.Println()
 	fmt.Println("=== ALGORITHMS ===")
@@ -63,22 +64,23 @@ func printShellHelp() {
 	fmt.Println()
 	fmt.Println("=== SHELL ===")
 	fmt.Println("help - Write this output")
-	fmt.Println("exit - Exit from the gosecrets shell")
+	fmt.Println("exit - Exit from the sec2m shell")
 }
 func printCommonHelp() {
 	fmt.Println("=== COMMANDS ===")
-	fmt.Println("put <key>      - Insert a key to the vault")
-	fmt.Println("update <key>   - Update a key in the vault")
-	fmt.Println("get <key>      - Get the value of a key in path")
-	fmt.Println("rm <key>       - Delete a key from the vault")
-	fmt.Println("rmd <dir>      - Delete a directory from the vault")
-	fmt.Println("mv <old> <new> - Rename a key in the vault")
-	fmt.Println("exec <args...> - Execute a system binary with given arguments")
-	fmt.Println("iter <cmds>    - Execute a sec2m shell pipeline commandlist passed in a quoted argument")
+	fmt.Println("put <key>           - Insert a key to the vault")
+	fmt.Println("update <key>        - Update a key in the vault")
+	fmt.Println("get <key>           - Get the value of a key in path")
+	fmt.Println("rm <key>            - Delete a key from the vault")
+	fmt.Println("rmd <dir>           - Delete a directory from the vault")
+	fmt.Println("mv <old> <new>      - Rename a key in the vault")
 	fmt.Println()
-	fmt.Println("ls <?dir>      - Print the items in the path in vault")
-	fmt.Println("cd <?dir>      - Change the current directory to the given path in vault")
-	fmt.Println("lsall <?dir>   - List all the keys in the given dir and in all of it's subdirs")
+	fmt.Println("exec <args...>      - Execute a system binary with given arguments")
+	fmt.Println("iter <delim> <cmds> - Split the provided stdin with delimiter, iterate through them and execute the provided command in every iteration while passing the item as stdin")
+	fmt.Println()
+	fmt.Println("ls <?dir>           - Print the items in the path in vault")
+	fmt.Println("cd <?dir>           - Change the current directory to the given path in vault")
+	fmt.Println("lsall <?dir>        - List all the keys in the given dir and in all of it's subdirs")
 }
 func printVaultInfo(sess *core.Session) {
 	fmt.Println("=== FILE INFO ===")
@@ -209,6 +211,39 @@ func main() {
 			fmt.Println("Error: "+err.Error())
 			os.Exit(1)
 		}
+	case "shot":
+		vaultPath := getVaultPath()
+
+		pw := getPassword("Vault password: ")
+		defer core.ZeroBytes(pw)
+
+		sess, err := core.LoadSession(vaultPath, pw)
+		if err != nil {
+			fmt.Println("Error: "+err.Error())
+			os.Exit(1)
+		}
+		defer sess.Destroy()
+
+		if len(os.Args) != 3 { 
+			fmt.Println("Invalid arguments. Usage: shot 'piped | command-list'")
+			os.Exit(1)
+		}
+
+		cmdArgs,err := parseArgs(os.Args[2])
+		if err != nil {
+			fmt.Println("Error while parsing arguments:", err)
+			os.Exit(1)
+		}
+
+		result, err := processCommandlist(sess, cmdArgs, []byte{})
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		defer core.ZeroBytes(result)
+
+		fmt.Printf("%s", result)
 
 	case "info":
 		vaultPath := getVaultPath()
@@ -283,7 +318,7 @@ func startShell(sess *core.Session) error {
 			}
 		}
 
-		result, err := processCommandlist(sess, args)
+		result, err := processCommandlist(sess, args, []byte{})
 		if err != nil { fmt.Println(err); continue }
 
 		fmt.Printf("%s\n", result)
@@ -292,7 +327,7 @@ func startShell(sess *core.Session) error {
 	}
 }
 
-func processCommandlist(sess *core.Session, args []string) ([]byte, error) {
+func processCommandlist(sess *core.Session, args []string, currentStdin []byte) ([]byte, error) {
 	// split arguments using "|"
 	var commandlist [][]string
 
@@ -314,7 +349,6 @@ func processCommandlist(sess *core.Session, args []string) ([]byte, error) {
 
 	}
 
-	var currentStdin []byte
 	var result []byte
 
 	for i, commandArgs := range commandlist {
@@ -362,18 +396,34 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 
 	switch args[0] {
 	case "put": // Add an entry with the value
-		if len(args) != 2 { return []byte{}, errors.New("Invalid arguments. Usage: put <key>") }
-
-		key := args[1]
-
-		var value []byte
-		if len(pipeStdin) == 0 {
-			value = getPassword("Value: ")
-		} else {
-			value = pipeStdin
+		if (len(args) < 2 && len(pipeStdin) == 0) || len(args) > 3 {
+			return []byte{}, errors.New("Invalid arguments. Usage: <?stdin:key:\n:value> | put <?key> <?value>")
 		}
 
-		err := sess.Put(key, value)
+		var key []byte
+		var value []byte
+
+		if len(args) == 3 {
+			key = []byte(args[1])
+			value = []byte(args[2]) // args is an immutable string slice. We cannot zero the secret password out. Convert it to [][]byte so we can zero it after usage.
+		} else if len(args) == 2 {
+			key = []byte(args[1])
+			value = pipeStdin
+
+			if len(value) == 0 {
+				value = getPassword("Value: ")
+			}
+		// If there is no arguments
+		} else {
+			var delimFound bool
+			key, value, delimFound = bytes.Cut(pipeStdin, []byte{'\n'})
+
+			if !delimFound {
+				return []byte{}, errors.New("Invalid arguments. Usage: <?stdin:key:\n:value> | put <?key> <?value>")
+			}
+		}
+
+		err := sess.Put(string(key), value)
 		if err != nil { return []byte{}, err }
 
 		err = sess.Save()
@@ -384,42 +434,92 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 		return []byte("Insertion successful\n"), nil
 
 	case "update":
-		if len(args) != 2 { return []byte{}, errors.New("Invalid arguments. Usage: update <key>") }
+		if (len(args) < 2 && len(pipeStdin) == 0) || len(args) > 3 {
+			return []byte{}, errors.New("Invalid arguments. Usage: <?stdin:key:\n:value> | update <?key> <?value>")
+		}
 
-		key := args[1]
-
-
+		var key []byte
 		var value []byte
-		if len(pipeStdin) == 0 {
-			value = getPassword("New value: ")
-		} else {
+
+		if len(args) == 3 {
+			key = []byte(args[1])
+			value = []byte(args[2]) // args is an immutable string slice. We cannot zero the secret password out. Convert it to [][]byte so we can zero it after usage.
+		} else if len(args) == 2 {
+			key = []byte(args[1])
 			value = pipeStdin
+
+			if len(value) == 0 {
+				value = getPassword("Value: ")
+			}
+		// If there is no arguments
+		} else {
+			var delimFound bool
+			key, value, delimFound = bytes.Cut(pipeStdin, []byte{'\n'})
+
+			if !delimFound {
+				return []byte{}, errors.New("Invalid arguments. Usage: <?stdin:key:\n:value> | update <?key> <?value>")
+			}
 		}
 
-		err := sess.Update(key, value)
-		if err != nil { return []byte{}, err }
+		fmt.Println("confirm the update attempt:",args[1])
+		input := getPassword("(y/n): ")
 
-		err = sess.Save()
-		if err != nil {
-			return []byte{}, errors.New("Error while saving changes: "+err.Error())
+		if string(input) == "y" {
+			err := sess.Update(string(key), value)
+			if err != nil { return []byte{}, err }
+
+			err = sess.Save()
+			if err != nil {
+				return []byte{}, errors.New("Error while saving changes: "+err.Error())
+			}
+
+			return []byte("Insertion successful\n"), nil
+		} else {
+			return []byte("Update attempt cancelled\n"), nil
 		}
-
-		return []byte("Insertion successful\n"), nil
 		
 	case "get": // Get an entry's value
-		if len(args) != 2 { return []byte{}, errors.New("Invalid arguments. Usage: get <key>") }
+		if (len(args) < 2 && len(pipeStdin) == 0 || len(args) > 2) {
+			return []byte{}, errors.New("Invalid arguments. Usage: <?stdin:key> | get <?key>")
+		}
 
-		key := args[1]
+		var key []byte
 
-		val, err := sess.Get(key)
+		if len(args) == 2 {
+			key = []byte(args[1])
+		} else {
+			key = pipeStdin
+		}
+
+		val, err := sess.Get(string(key))
 		if err != nil { return []byte{}, err }
 
 		return val, nil
 
 	case "mv":
-		if len(args) != 3 { return []byte{}, errors.New("Invalid arguments. Usage: mv <oldkey> <newkey>") }
+		if len(args) < 3 && len(pipeStdin) == 0 || len(args) > 3{
+			return []byte{}, errors.New("Invalid arguments. Usage: <?stdin:oldkey:\n:newkey>| mv <?oldkey> <?newkey>")
+		}
 
-		oldkey, newkey := args[1], args[2]
+		var oldkey string
+		var newkey string
+
+		if len(args) == 3 {
+			oldkey = args[1]
+			newkey = args[2]
+		} else if len(args) == 2 {
+			oldkey = args[1]
+			newkey = string(pipeStdin)
+
+		// If there is no arguments
+		} else {
+			var delimFound bool
+			oldkey, newkey, delimFound = strings.Cut(string(pipeStdin), "\n")
+
+			if !delimFound {
+				return []byte{}, errors.New("Invalid arguments. Usage: <?stdin:oldkey:\n:newkey> | mv <?oldkey> <?newkey>")
+			}
+		}
 
 		err := sess.Mv(oldkey, newkey)
 		if err != nil { return []byte{}, err }
@@ -581,16 +681,26 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
     	if err != nil { return outBuf.Bytes(), err } // Return both the captured output and the error
 
 		return outBuf.Bytes(), nil
+
+	// Read the stdin, split it with the given delimiter, iterate through them and execute the provided command in every iteration
 	case "iter":
-		if len(args) < 2 { return []byte{}, errors.New("Invalid arguments. Usage: iter 'piped | command-list'") }
+		if len(args) != 3 { return []byte{}, errors.New("Invalid aruments. Usage: iter <delim> 'piped | commands'")}
+		
+		delim := args[1] 
 
-		iterArgs,err := parseArgs(args[1])
+		lines := bytes.Split(pipeStdin, []byte(delim))
+
+		cmd, err := parseArgs(args[2])
 		if err != nil {return []byte{}, err}
 
-		result, err := processCommandlist(sess, iterArgs)
-		if err != nil {return []byte{}, err}
+		var finalResult []byte
+		for _, line := range lines {
+			result, err := processCommandlist(sess, cmd, line)
+			if err != nil {return []byte{}, err}
+			finalResult = result
+		}
 
-		return result, nil
+		return finalResult, nil
 
 	default:
 		shortcutVal := shortcuts[args[0]]
@@ -611,7 +721,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 				return []byte{}, fmt.Errorf("Shortcut expansion error: %w", err)
 			}
 
-			return processCommandlist(sess, expandedArgs)
+			return processCommandlist(sess, expandedArgs, pipeStdin)
 		}
 	}
 

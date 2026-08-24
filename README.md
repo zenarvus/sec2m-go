@@ -5,14 +5,19 @@ A CLI based key/value secret manager that stores everything inside a simple file
 - Simple, Compack serialized `.sdb` file format.
 - Smaller, auditable codebase (~2000 LoC) with small amount of dependencies compared to alternatives that use KDBX (kpcli is ~8000 LoC)
 - Strong cryptographic algorithms (xchacha20, aes-cbc-256, polysha, argon2id etc.)
-- MAC integrity check for the entire file (version, header, payload) using the provided hash algorithm.
-- Along with entire payload encryption, every secret value is encrypted individually and stay in memory encrypted.
+- HMAC integrity check for the entire file (version, header, payload) using the provided hash algorithm and Encrypt-Then-MAC scheme.
+- Along with entire payload encryption, every secret value is encrypted individually to protect them even in memory.
 - The encryption and signature keys are encrypted in memory using the session key and only decrypted on demand.
 - Session key is stored securely on memory using memory locking and by preventing core dumping in supported platforms (android & linux)
 - Flat, `POSIX portable filepath -> binary value` array structure, supporting all kinds of values.
-- Shell like directory navigation using and `cd`, `ls`
-- Shell session, executing system binaries and command piping.
+- Shell like directory navigation using `cd`, `ls` and `lsall`
+- Shell session, executing system binaries and command pipeline.
 - Command aliases using `/.shortcut/` values.
+
+## Roadmap
+- Implement auto completion
+- Make rm, rmd, ls, lsall and cd accept arguments from stdin
+- Make being able to unlock the vault by passing password as stdin possible. But it should not prevent passing things to get etc. from the same pipeline. We may use an environment variable for that.
 
 ## Cryptography
 
@@ -40,7 +45,7 @@ EncryptedMacKey = Encryption(MessageAuthenticationCodeKey, SessionKey, Nonce())
 
 EncryptedFieldValue = Encryption(value, InnerEncryptionKey, Nonce())
 EncryptedBody = Encryption(body, OuterEncryptionKey, Nonce())
-Signature = HashMAC(MessageAuthenticationCodeKey, Version, Header, EncryptedBody) # Uses the provided hash algorithm for the MAC signature
+Signature = HMAC(MessageAuthenticationCodeKey, Version, Header, EncryptedBody) # Uses the provided hash algorithm for the HMAC signature
 ```
 
 - Salt guarantees that the derived key is completely unique per vault, even if two vaults use the identical password.
@@ -56,7 +61,8 @@ Usage: VAULT=/path/to/file gosecrets <command> [args...]
 init <dalg> <ealg> <halg>   - Init the vault file in VAULT location
 change <dalg> <ealg> <halg> - Change the given vault's algorithms and password
 help                        - Write this output
-shell                       - Long lived gosecrets shell session you can execute commands
+shell                       - Long lived sec2m shell session you can execute commands
+shot <cmds>                 - Execute a sec2m shell pipeline command and exit
 info                        - Print non-critical info about the vault: headers, shortcuts and entry-count.
 
 === ALGORITHMS ===
@@ -75,18 +81,19 @@ Hashing (<halg>):
   - blake3-256: 32 byte blake3
 
 === COMMANDS ===
-put <key>      - Insert a key to the vault
-update <key>   - Update a key in the vault
-get <key>      - Get the value of a key in path
-rm <key>       - Delete a key from the vault
-rmd <dir>      - Delete a directory from the vault
-mv <old> <new> - Rename a key in the vault
-exec <args...> - Execute a system binary with given arguments
-iter <cmds>    - Execute a sec2m shell pipeline commandlist passed in a quoted argument
+put <key>           - Insert a key to the vault
+update <key>        - Update a key in the vault
+get <key>           - Get the value of a key in path
+rm <key>            - Delete a key from the vault
+rmd <dir>           - Delete a directory from the vault
+mv <old> <new>      - Rename a key in the vault
 
-ls <?dir>      - Print the items in the path in vault
-cd <?dir>      - Change the current directory to the given path in vault
-lsall <?dir>   - List all the keys in the given dir and in all of it's subdirs
+exec <args...>      - Execute a system binary with given arguments
+iter <delim> <cmds> - Split the provided stdin with delimiter, iterate through them and execute the provided command in every iteration while passing the item as stdin
+
+ls <?dir>           - Print the items in the path in vault
+cd <?dir>           - Change the current directory to the given path in vault
+lsall <?dir>        - List all the keys in the given dir and in all of it's subdirs
 ```
 
 ## Quick Pipeline & Shortcut Guide

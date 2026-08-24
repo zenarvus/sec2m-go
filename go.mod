@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/chzyer/readline v1.5.1
 	github.com/zenarvus/compack/go v0.0.0-20260720140143-bb902f5a040a
-	github.com/zenarvus/polyformats/polysha/go v0.0.0-20260722100034-84bc7defc77e
+	github.com/zenarvus/polyformats/polysha/go v0.0.0-20260824095009-2a5802efcab5
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
