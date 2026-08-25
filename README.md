@@ -55,7 +55,7 @@ Signature = HMAC(MessageAuthenticationCodeKey, Version, Header, EncryptedBody) #
 ## Commands
 
 ```
-Usage: VAULT=/path/to/file gosecrets <command> [args...]
+Usage: VAULT=/path/to/file sec2m <command> [args...]
 
 === MAIN COMMANDS ===
 init <dalg> <ealg> <halg>   - Init the vault file in VAULT location
@@ -81,19 +81,19 @@ Hashing (<halg>):
   - blake3-256: 32 byte blake3
 
 === COMMANDS ===
-put <key>           - Insert a key to the vault
-update <key>        - Update a key in the vault
-get <key>           - Get the value of a key in path
-rm <key>            - Delete a key from the vault
-rmd <dir>           - Delete a directory from the vault
-mv <old> <new>      - Rename a key in the vault
+put <key>       - Insert a key to the vault
+update <key>    - Update a key in the vault
+get <key>       - Get the value of a key in path
+rm <key>        - Delete a key from the vault
+rmd <dir>       - Delete a directory from the vault
+mv <old> <new>  - Rename a key in the vault
 
-exec <args...>      - Execute a system binary with given arguments
-iter <delim> <cmds> - Split the provided stdin with delimiter, iterate through them and execute the provided command in every iteration while passing the item as stdin
+exec <args...>  - Execute a system binary with given arguments
+iter <cmds>     - Split the provided stdin by newlines, iterate through them and execute the provided command in every iteration while passing the item as stdin
 
-ls <?dir>           - Print the items in the path in vault
-cd <?dir>           - Change the current directory to the given path in vault
-lsall <?dir>        - List all the keys in the given dir and in all of it's subdirs
+ls <?dir>       - Print the items in the path in vault
+cd <?dir>       - Change the current directory to the given path in vault
+lsall <?dir>    - List all the keys in the given dir and in all of it's subdirs
 ```
 
 ## Quick Pipeline & Shortcut Guide

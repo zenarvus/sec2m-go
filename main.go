@@ -68,19 +68,19 @@ func printShellHelp() {
 }
 func printCommonHelp() {
 	fmt.Println("=== COMMANDS ===")
-	fmt.Println("put <key>           - Insert a key to the vault")
-	fmt.Println("update <key>        - Update a key in the vault")
-	fmt.Println("get <key>           - Get the value of a key in path")
-	fmt.Println("rm <key>            - Delete a key from the vault")
-	fmt.Println("rmd <dir>           - Delete a directory from the vault")
-	fmt.Println("mv <old> <new>      - Rename a key in the vault")
+	fmt.Println("put <key>       - Insert a key to the vault")
+	fmt.Println("update <key>    - Update a key in the vault")
+	fmt.Println("get <key>       - Get the value of a key in path")
+	fmt.Println("rm <key>        - Delete a key from the vault")
+	fmt.Println("rmd <dir>       - Delete a directory from the vault")
+	fmt.Println("mv <old> <new>  - Rename a key in the vault")
 	fmt.Println()
-	fmt.Println("exec <args...>      - Execute a system binary with given arguments")
-	fmt.Println("iter <delim> <cmds> - Split the provided stdin with delimiter, iterate through them and execute the provided command in every iteration while passing the item as stdin")
+	fmt.Println("exec <args...>  - Execute a system binary with given arguments")
+	fmt.Println("iter <cmds>     - Split the provided stdin by newlines, iterate through them and execute the provided command in every iteration while passing the item as stdin")
 	fmt.Println()
-	fmt.Println("ls <?dir>           - Print the items in the path in vault")
-	fmt.Println("cd <?dir>           - Change the current directory to the given path in vault")
-	fmt.Println("lsall <?dir>        - List all the keys in the given dir and in all of it's subdirs")
+	fmt.Println("ls <?dir>       - Print the items in the path in vault")
+	fmt.Println("cd <?dir>       - Change the current directory to the given path in vault")
+	fmt.Println("lsall <?dir>    - List all the keys in the given dir and in all of it's subdirs")
 }
 func printVaultInfo(sess *core.Session) {
 	fmt.Println("=== FILE INFO ===")
@@ -684,17 +684,18 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 
 	// Read the stdin, split it with the given delimiter, iterate through them and execute the provided command in every iteration
 	case "iter":
-		if len(args) != 3 { return []byte{}, errors.New("Invalid aruments. Usage: iter <delim> 'piped | commands'")}
+		if len(args) != 2 { return []byte{}, errors.New("Invalid aruments. Usage: iter 'piped | commands'")}
 		
-		delim := args[1] 
+		lines := bytes.Split(pipeStdin, []byte{'\n'})
 
-		lines := bytes.Split(pipeStdin, []byte(delim))
-
-		cmd, err := parseArgs(args[2])
+		cmd, err := parseArgs(args[1])
 		if err != nil {return []byte{}, err}
 
 		var finalResult []byte
 		for _, line := range lines {
+			// Skip empty slices resulting from trailing newline characters
+			if len(bytes.TrimSpace(line)) == 0 { continue }
+
 			result, err := processCommandlist(sess, cmd, line)
 			if err != nil {return []byte{}, err}
 			finalResult = result
@@ -787,7 +788,20 @@ func parseArgs(input string) ([]string, error) {
 
 	for _, r := range input {
 		// If the element is escaped, write it directly to arg, disable escaping and continue.
-		if escaped { arg.WriteRune(r); escaped=false; continue }
+		if escaped {
+			switch r {
+			case 'n':
+				arg.WriteRune('\n')
+			case 't':
+				arg.WriteRune('\t')
+			case 'r':
+				arg.WriteRune('\r')
+			default:
+				arg.WriteRune(r)
+			}
+			escaped = false
+			continue
+		}
 
 		// If there is a slash, escape the next element.
 		if r == '\\' { escaped=true; continue }
