@@ -235,7 +235,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		result, err := processCommandlist(sess, cmdArgs, []byte{})
+		result, err := processCommandlist(sess, cmdArgs, []byte{}, true)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -281,6 +281,7 @@ func startShell(sess *core.Session) error {
 		Prompt:          sess.Pwd + ": ",
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
+		AutoComplete: &AutoCompleter{sess:sess},
 	})
 	if err != nil { return err }
 	defer rl.Close() // Exit from the readline when loop ends.
@@ -318,7 +319,7 @@ func startShell(sess *core.Session) error {
 			}
 		}
 
-		result, err := processCommandlist(sess, args, []byte{})
+		result, err := processCommandlist(sess, args, []byte{}, true)
 		if err != nil { fmt.Println(err); continue }
 
 		fmt.Printf("%s\n", result)
@@ -327,7 +328,7 @@ func startShell(sess *core.Session) error {
 	}
 }
 
-func processCommandlist(sess *core.Session, args []string, currentStdin []byte) ([]byte, error) {
+func processCommandlist(sess *core.Session, args []string, currentStdin []byte, isPipelineLastCommand bool) ([]byte, error) {
 	// split arguments using "|"
 	var commandlist [][]string
 
@@ -354,7 +355,8 @@ func processCommandlist(sess *core.Session, args []string, currentStdin []byte) 
 	for i, commandArgs := range commandlist {
 		if len(commandArgs) == 0 { continue }
 
-		isLastCommand := i == len(commandlist)-1
+		// If it's the last command in the commandlist and the caller says it's the last command in outer pipeline (required for exec in shortcuts etc)
+		isLastCommand := i == len(commandlist)-1 && isPipelineLastCommand
 
 		res, err := processCommand(sess, currentStdin, commandArgs, isLastCommand)
 		if err != nil { return nil, err }
@@ -362,7 +364,7 @@ func processCommandlist(sess *core.Session, args []string, currentStdin []byte) 
 		currentStdin = res
 
 		// If we are at the end of the commandList, pass the res to the final result.
-		if isLastCommand { result = res }
+		if i == len(commandlist)-1 { result = res }
 
 	}
 
@@ -696,7 +698,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 			// Skip empty slices resulting from trailing newline characters
 			if len(bytes.TrimSpace(line)) == 0 { continue }
 
-			result, err := processCommandlist(sess, cmd, line)
+			result, err := processCommandlist(sess, cmd, line, lastCommand)
 			if err != nil {return []byte{}, err}
 			finalResult = result
 		}
@@ -722,7 +724,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 				return []byte{}, fmt.Errorf("Shortcut expansion error: %w", err)
 			}
 
-			return processCommandlist(sess, expandedArgs, pipeStdin)
+			return processCommandlist(sess, expandedArgs, pipeStdin, lastCommand)
 		}
 	}
 
@@ -835,4 +837,90 @@ func parseArgs(input string) ([]string, error) {
 	if arg.Len() > 0 { args = append(args, arg.String()) }
 
 	return args, nil
+}
+
+///////////////////////////////////////////////////////
+
+type AutoCompleter struct { sess *core.Session }
+
+// Do implements the readline.AutoCompleter interface directly
+func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, length int) {
+	lineStr := string(line[:pos]) // Get the everything until the cursor
+	
+	// Handle empty or whitespace-only input
+	if strings.TrimSpace(lineStr) == "" { return nil, 0 }
+
+	// Split by space to figure out if we are completing a command or a path
+	args := strings.Split(lineStr, " ")
+
+	// If we are typing the first word, complete the command itself
+	if len(args) == 1 {
+		cmds := []string{"help", "exit", "info", "put", "get", "rm", "update", "mv", "cd", "rmd", "ls", "lsall"}
+		for _, cmd := range cmds {
+			if strings.HasPrefix(cmd, lineStr) {
+				// Append the remaining string for completion of the current types string
+				completionOpts = append(completionOpts, []rune(strings.TrimPrefix(cmd, lineStr)))
+			}
+		}
+		// Return the completion options
+		return completionOpts, 0
+	}
+
+	// If there are more than one argument, we are typing arguments of the command (file/folder paths)
+
+	cmd := args[0]
+	lastArg := args[len(args)-1]
+
+	dirsOnly := false
+	switch cmd {
+	case "cd", "rmd", "ls", "lsall":
+		dirsOnly = true
+	case "get", "rm", "update", "mv":
+		dirsOnly = false
+	// For other things like shortcuts, complete everything
+	default: dirsOnly = false
+	}
+
+	// Fetch dynamic completions
+	results := v.getCompletions(lastArg, dirsOnly)
+	
+	// Filter results to only those that match what the user typed and return the remaining possibilities
+	for _, res := range results {
+		if strings.HasPrefix(res, lastArg) {
+			completionOpts = append(completionOpts, []rune(strings.TrimPrefix(res, lastArg)))
+		}
+	}
+
+	// Return the completion possibilities
+	return completionOpts, 0
+}
+
+// Updated helper logic attached to the struct
+func (v *AutoCompleter) getCompletions(line string, dirsOnly bool) []string {
+	dirPath := ""
+	
+	// Extract the directory portion of the string
+	if idx := strings.LastIndex(line, "/"); idx != -1 {
+		dirPath = line[:idx]
+		if dirPath == "" { dirPath = "/"  } // For absolute paths (like typing "/folder")
+	}
+
+	dirs, entries, err := v.sess.Ls(dirPath)
+	if err != nil { return nil }
+
+	var results []string
+	prefix := dirPath
+	if prefix != "" && prefix != "/" {
+		prefix += "/"
+	} else if prefix == "/" { prefix = "/" }
+
+	// Add subdirectories (always append trailing slash so we can keep pressing TAB)
+	for _, d := range dirs { results = append(results, prefix+d+"/") }
+
+	// Add files if not restricted to directories
+	if !dirsOnly {
+		for _, e := range entries { results = append(results, prefix+e) }
+	}
+	
+	return results
 }
