@@ -58,7 +58,7 @@ change <dalg> <ealg> <halg> - Change the given vault's algorithms and password
 help                        - Write this output
 shell                       - Long lived sec2m shell session you can execute commands
 shot <cmds>                 - Execute a sec2m shell pipeline command and exit
-info                        - Print non-critical info about the vault: headers, shortcuts and entry-count.
+info                        - Print info about the version, header and signature of the file
 
 === ALGORITHMS ===
 Key Derivation (<dalg>):
@@ -76,19 +76,19 @@ Hashing (<halg>):
   - blake3-256: 32 byte blake3
 
 === COMMANDS ===
-put <key>       - Insert a key to the vault
-update <key>    - Update a key in the vault
-get <key>       - Get the value of a key in path
-rm <key>        - Delete a key from the vault
-rmd <dir>       - Delete a directory from the vault
-mv <old> <new>  - Rename a key in the vault
+put <?epath> <?value>    - Insert an entry to the vault
+update <?epath> <?value> - Update an entry in the vault
+get <?epath>             - Get the value using entry path
+rm <?epath>              - Delete an entry from the vault
+rmd <?dpath>             - Delete a directory from the vault
+mv <?old> <?ew>          - Rename an entry in the vault
 
-exec <args...>  - Execute a system binary with given arguments
-iter <cmds>     - Split the provided stdin by newlines, iterate through them and execute the provided command in every iteration while passing the item as stdin
+exec [args]              - Execute a system binary with given arguments
+iter <cmds>              - Split the provided stdin by newlines, iterate through them and execute the provided command in every iteration while passing the item as stdin
 
-ls <?dir>       - Print the items in the path in vault
-cd <?dir>       - Change the current directory to the given path in vault
-lsall <?dir>    - List all the keys in the given dir and in all of it's subdirs
+ls <?dpath>              - Print the items in the path in vault
+cd <?dpath>              - Change the current directory to the given path in vault
+lsall <?dpath>           - List all the keys in the given dir and in all of it's subdirs
 ```
 
 ## Quick Pipeline & Shortcut Guide

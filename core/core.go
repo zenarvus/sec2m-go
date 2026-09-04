@@ -84,33 +84,33 @@ var encAlgoToKeylen = map[uint64]int{
 
 type File struct {
 	Version uint64 `cmpck:"1"` // Version of the file.
-	Header []byte `cmpck:"2"` // Info about the version of the database, algorithms used etc.
-	Body []byte `cmpck:"3"` // The actual encrypted entries list.
-	Signature []byte `cmpck:"4"` // The HMAC signature of the version, header and body.
+	Header []byte `cmpck:"2"` // Info about the algorithms, nonce and salt.
+	Body []byte `cmpck:"3"` // The encrypted entry list.
+	Signature []byte `cmpck:"4"` // The HMAC signature of the version, header and encrypted body.
 }
 type UnmarshaledHeader struct {
-	KDAlgo uint64 `cmpck:"1"` // The key derivation algorithm used to hash the password. Like argon2id.
+	KDAlgo uint64 `cmpck:"1"` // The key derivation algorithm used. Like argon2id.
 	KDSalt []byte `cmpck:"2"` // The random salt used in key derivation. Permanent for the vault.
 	KDParams []byte `cmpck:"3"` // Parameters used in key derivation
 
-	SEAlgo uint64 `cmpck:"4"`  // The symmetric encryption algorithm used to encrypt the data. Like aes-cbc.
-	SENonce []byte `cmpck:"5"` // The random nonce used in outer symmetric encryption. Changes in every save.
+	SEAlgo uint64 `cmpck:"4"`  // The symmetric encryption algorithm used. Like aes-cbc.
+	SENonce []byte `cmpck:"5"` // The random nonce used in outer symmetric encryption (whole body). Changes in every save.
 
-	HashAlgo uint64 `cmpck:"6"`  // hash algorithm used for signatures and in vault key derivation
+	HashAlgo uint64 `cmpck:"6"`  // Hash algorithm used in signatures and key derivation
 }
 type UnencryptedBody struct {
 	Entries []Entry `cmpck:"1"`
 }
 type Entry struct {
-	Path string `cmpck:"1"` // The path for the entry
-	Value []byte `cmpck:"2"`  // The encrypted entry value
+	Path string `cmpck:"1"` // The path of the entry
+	Value []byte `cmpck:"2"`  // The value encrypted with inner key
 	Nonce []byte `cmpck:"3"` // The nonce used to encrypt the value
-	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds)
+	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
 }
 type Argon2IDParams struct {
-	Iterations uint32 `cmpck:"1"`
-	Memory uint32 `cmpc:"2"` // In megabytes! Multiply with 1024 to get kilobytes for argon2id
-	Threads uint32 `cmpck:"3"`
+	Iterations uint32 `cmpck:"1"` // Iterations
+	Memory uint32 `cmpc:"2"` // Required memory in megabytes
+	Threads uint32 `cmpck:"3"` // Parallel threads used while deriving keys
 }
 
 ///////////////////////////////////////////////

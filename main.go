@@ -416,7 +416,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 
 		if len(args) == 3 {
 			key = []byte(args[1])
-			value = []byte(args[2]) // args is an immutable string slice. We cannot zero the secret password out. Convert it to [][]byte so we can zero it after usage.
+			value = []byte(args[2]) // args is an immutable string slice. We cannot zero the secret password out.
 		} else if len(args) == 2 {
 			key = []byte(args[1])
 			value = pipeStdin
@@ -454,7 +454,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 
 		if len(args) == 3 {
 			key = []byte(args[1])
-			value = []byte(args[2]) // args is an immutable string slice. We cannot zero the secret password out. Convert it to [][]byte so we can zero it after usage.
+			value = []byte(args[2]) // args is an immutable string slice. We cannot zero the secret password out.
 		} else if len(args) == 2 {
 			key = []byte(args[1])
 			value = pipeStdin
@@ -743,12 +743,12 @@ func processCommand(sess *core.Session, pipeStdin []byte, args []string, lastCom
 func getShortcuts(sess *core.Session) (map[string][]byte) {
 	var shortcuts = make(map[string][]byte)
 
-	for key := range sess.EntryMap {
+	for epath := range sess.EntryMap {
 		// If the key is the top level key in the shortcut dir, add it to the shortcuts.
-		if strings.HasPrefix(key, "/.shortcut/") {
-			shortcut,_ := strings.CutPrefix(key, "/.shortcut/")
+		if strings.HasPrefix(epath, "/.shortcut/") {
+			shortcut,_ := strings.CutPrefix(epath, "/.shortcut/")
 			if !strings.Contains(shortcut, "/") {
-				shortcutVal, _ := sess.Get(key)
+				shortcutVal, _ := sess.Get(epath)
 				shortcuts[shortcut] = shortcutVal
 			}
 		}
