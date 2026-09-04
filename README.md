@@ -26,9 +26,9 @@ go build main.go
 It outputs a compiled binary named `main` which is the application.
 
 ## Roadmap
-- Use memguard instead
+- Allocate critical memory directly with system calls and manage them manually.
 - Make rm, rmd, ls, lsall and cd accept arguments from stdin
-- Make being able to unlock the vault by passing password as stdin possible. But it should not prevent passing things to get etc. from the same pipeline. We may use an environment variable for that.
+- Make being able to unlock the vault by passing password as stdin possible. This should not prevent passing things to internal commands. So, the first line should be the vault password and the second should be the internal arguments (if an environment variable is set
 
 ## Cryptography
 
