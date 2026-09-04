@@ -6,20 +6,21 @@ A CLI based key/value secret manager that stores everything inside a simple file
 - Intentionally small, auditable codebase
 - Strong cryptographic primitives (xchacha20, sha3-256, argon2id etc.)
 - HMAC integrity check for the entire file (version, header, payload) using the provided hash algorithm and Encrypt-Then-MAC scheme
-- Along with entire payload encryption, every secret value is encrypted individually to avoid storing them as plain-text in memory
-- The encryption and signature keys are encrypted in memory using a random session key and only decrypted on demand.
-- Session key is stored securely on memory using memory locking and by preventing core dumping in supported platforms (android & linux)
-- Flat, `POSIX portable filepath -> binary value` array structure, supporting all kinds of values
+- Along with entire body encryption, values are encrypted with per entry random nonce for in-memory security
+- The encryption and signature keys are encrypted using a random session key and only decrypted on demand.
+- Core dumping is prevented and memory locking is used on supported platforms (android & linux)
+- Variables are zeroed out in memory after usage (Not when passed as command arguments, so try to prefer stdin)
+- Supports all kinds of values with flat, `POSIX portable filepath -> binary value` array structure
 - Shell like directory navigation using `cd`, `ls` and `lsall`
 - Internal shell session with auto completions, system binary execution and command pipeline
 - Command aliases using `/.shortcut/` values
 
 ## Motivation
-For a long time, I used keepassxc as my password manager, but as I started to be more minimalist and use keyboard more often, using it started to feel like a burden. I tried keepassxc-cli right after, but it's usage also not really satisfied me. I could not make auto-completion work and navigation and entry management was hard. I then tried kpcli, but it would gave me errors I didn't know how to fix.
+For a long time, I used keepassxc as my password manager, but as I started to be more minimalist and use keyboard more often, using it started to feel like a burden. I tried keepassxc-cli right after, however it's usage also not really satisfied me. I could not make auto-completion work and navigation and entry management was hard. I then tried kpcli, but it would gave me errors I didn't know how to fix.
 
 When all of these got out of option, I realized that no any robust CLI app exists to make me be able to use my existing `.kdbx` vault. I will have to migrate to an another format. I didn't wanna use unaudited password managers, so I looked for popular CLI alternatives to `.kdbx` password managers. `pass` looked good initially, but it mainly used asymmetric encryption and different file and folder for each entry, which I didn't really prefer. It was the time I decided to create my own one. While I knew one or two things about signatures, encryption and key derivation, I never used them together to create an app offering "enterprise grade" security. So, I decided to look how `.kdbx` format is structured.
 
-While it helped me to understand how to implement a proper password manager; boy, it was bad. Not in terms of security, it's already well-known for being pretty solid about that, but in terms of structure and how thing glued to each other. Let me summarize what I didn't like about it:
+While it helped me to understand how to implement a proper password manager; boy, it was bad. Not in terms of security, it's already well-known for being pretty solid about that, but in terms of structure and how things are glued to each other.
 - Using XML encoding in body: It's bloated and decoders are hard to write properly.
 - Using compression in an attempt to reduce the size of the body: An additional complexity that increases the attack surface further on top of already complex XML. You wouldn't need that if you just used protobuf.
 - Weird body structure: Just look at this and tell me it's well-structured and easy to implement, can you? <https://keepass.info/help/download/KDBX_XML.xsd>
@@ -47,6 +48,8 @@ It outputs an executable file named `main` which is our application. Feel free t
 - Make rm, rmd, ls, lsall and cd accept arguments from stdin
 - Make being able to unlock the vault by passing password as stdin possible. This should not prevent passing things to internal commands. So, the first line should be the vault password and the second should be the internal arguments (if an environment variable is set
 - Unify the terminology across the codebase
+- Actually use the modification time. It's good for merging two files
+- Consider addimg `$()` where it's possible to execute a command inside. Or, make `iter` execute multiple commands with the same stdin? Idk
 
 ## Help
 ```
@@ -105,8 +108,31 @@ For example, this shell command adds a `cget` shortcut which executes `get {1} |
 
 There are some example scripts in `helpers.sh` you can use with shortcuts to implement features like password generation TOTP, clipboard deletion with interval, and disabling clipboard history when copying secrets.
 
-## Migrating From `.kdbx`
-WIP
+## Import & Export
+It's convenient to use a flat list of `[entry path] [base64 encoded value]` pairs separated with `\n` on imports and exports. So `migration.sh` folder contains helper scripts that use this format. (requires base64 binary)
+
+To export everything in this flat list format, use the following command in shell:
+
+`lsall / | iter "exec /path/to/exporter.sh 1 | get | exec /path/to/exporter.sh 2"`
+
+- `lsall /`: Prints every entry in the vault
+- `iter [cmd]`: Iterates on them line by line and executes the command
+- `exec /path/to/exporter.sh 1`: writes the path to `sec2m.export` file and to the stdout.
+- `get`: gets the value of the key from the piped stdout and writes to next command's stdin
+- `exec /path/to/exporter.sh 2`: Encodes the value as base64, appends to the .export file and adds a newline
+
+To import everything from it, use the following command in shell:
+
+`exec cat /path/to/sec2m.export | iter "exec /path/to/importer.sh | put"`
+
+- `exec cat /path/to/sec2m.export`: Prints all the path/value pairs.
+- `iter [cmd]`: Iterates on them line by line and executes the command
+- `exec /path/to/importer.sh`: Reads the line, decodes the base64 value and writes them to put's stdin
+- `put` Puts the key/value pair to the vault
+
+### Migrating From `.kdbx`
+`migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to a flat `path -> base64 value` list. Then, you can use the command above to import it.
+- Note: It's actually a go code wrapped in a shell script. Make sure you installed go.
 
 ## `.sdb` Format
 The `.sdb` format uses compack, a protobuf like binary encoding protocol with 1-bit wire-type, for the file according to the following scheme:

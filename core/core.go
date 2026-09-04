@@ -263,6 +263,10 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	err = cmpck.Unmarshal(fileBytes, &fileStruct)
 	if err != nil {return nil, err}
 
+	if fileStruct.Version != 1 {
+		return nil, errors.New("unsupported vault version")
+	}
+
 	sess.Version = fileStruct.Version
 	sess.Signature = fileStruct.Signature
 
