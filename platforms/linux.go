@@ -18,7 +18,7 @@ func DisableCoreDump() error {
 }
 
 // Allocate a buffer from the RAM
-func Alloc(len int) ([]byte, error)
+//func Alloc(len int) ([]byte, error)
 
 // Deallocate a buffer from the RAM
-func Dealloc(b []byte) (error)
+//func Dealloc(b []byte) (error)
