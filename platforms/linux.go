@@ -16,3 +16,9 @@ func LockMemory(b []byte) error {
 func DisableCoreDump() error {
 	return unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
 }
+
+// Allocate a buffer from the RAM
+func Alloc(len int) ([]byte, error)
+
+// Deallocate a buffer from the RAM
+func Dealloc(b []byte) (error)

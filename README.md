@@ -3,7 +3,7 @@ A CLI based key/value secret manager that stores everything inside a simple file
 
 ## Features
 - Simple, Compack serialized `.sdb` file format.
-- Smaller, auditable codebase (~2100 LoC) with small amount of dependencies compared to alternatives that use KDBX (kpcli is ~8000 LoC)
+- Small, auditable codebase (~2100 LoC) with small attack surface compared to alternatives using KDBX (kpcli is ~8000 LoC)
 - Strong cryptographic algorithms (xchacha20, aes-cbc-256, polysha, argon2id etc.)
 - HMAC integrity check for the entire file (version, header, payload) using the provided hash algorithm and Encrypt-Then-MAC scheme.
 - Along with entire payload encryption, every secret value is encrypted individually to protect them even in memory.
@@ -14,7 +14,19 @@ A CLI based key/value secret manager that stores everything inside a simple file
 - Shell session with auto completions, system binary execution and command pipeline.
 - Command aliases using `/.shortcut/` values.
 
+## Installation
+It's a single binary with no external dependencies. You need go and git to install it.
+
+```
+git clone https://github.com/zenarvus/sec2m-go
+cd sec2m-go
+go build main.go
+```
+
+It outputs a compiled binary named `main` which is the application.
+
 ## Roadmap
+- Use memguard instead
 - Make rm, rmd, ls, lsall and cd accept arguments from stdin
 - Make being able to unlock the vault by passing password as stdin possible. But it should not prevent passing things to get etc. from the same pipeline. We may use an environment variable for that.
 
