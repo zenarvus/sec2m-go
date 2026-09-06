@@ -1,34 +1,37 @@
 # Sec2M Secure Secrets Manager
-A CLI based key/value secret manager that stores everything inside a simple file formatted with compack.
+<table>
+<tr>
+<td align="center" width="200"><img width="360" height="360" alt="lain-sec2m" src="https://github.com/zenarvus/sec2m-go/raw/refs/heads/main/logo.png"/></td>
+<td><h3>Got secrets to keep? Sec2M is a CLI based, one-file secrets manager for cool kids who love security and minimalism.</h3></td>
+</tr>
+</table>
 
 ## Features
-- Simple and small Compack serialized `.sdb` file format
-- Strong cryptographic primitives (xchacha20, sha3-256, argon2id etc.)
-- HMAC integrity check for the entire file (version, header, payload) using the provided hash algorithm and Encrypt-Then-MAC scheme
-- Along with entire body encryption, values are encrypted individually for in-memory security
-- The encryption and signature keys are encrypted using a random session key and only decrypted on demand.
-- Core dumping is prevented and memory locking is used for the session key on supported platforms (android & linux)
-- Variables are zeroed out in memory after usage (Not when passed as literal command arguments)
-- Supports all kinds of values with flat, `POSIX portable filepath -> binary value` array structure
+- Everything stays local with a small and simple, Compack serialized `.sdb` file format
+- Strong and flexible cryptographic primitive list containing xchacha20, sha3-256 and argon2id
+- Whole file HMAC integrity check using the Encrypt-Then-MAC scheme
+- Additional per-value encryption for in-memory security
+- Per-Session-Key to store encryption and signature keys securely on memory
+- Core-dumping prevention and memory locking for the session key on supported platforms (android & linux)
+- Explicit variable zeroing after usage (not when passed as literal command arguments)
+- Extensible `[POSIX Portable Filepath] -> [Binary Value]` array structure. Like UNIX, everything is an entry
 - Shell like directory navigation using `cd`, `ls` and `lsall`
-- Internal shell session with auto completions, system binary execution, command substitutions and pipeline
-- Command aliases using `/.shortcut/` values
-- TOTP, Clipboard clearing and password generation with helper scripts in `helpers.sh`
+- Internal shell session with auto completions, system binary execution, command substitutions and pipelines
+- Command aliasing using the entries in `/.shortcut/`
+- TOTP, Clipboard copy/clearing, password generation and more with helper scripts
 
 ## Installation
-It's a single binary app with no external dependencies nor config files. You need go and git to install it.
+Sec2M is a single binary application with no external runtime dependencies nor config files. You just need go and git to install it.
 
-```
-git clone https://github.com/zenarvus/sec2m-go
-cd sec2m-go
-go build main.go
+```bash
+git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build main.go
 ```
 
-It outputs an executable file named `main` which is our application. Feel free to move it anywhere you want or simply just delete.
+Now you are ready to go!
 
 ## Roadmap
-- Allocate critical memory directly with system calls and manage them manually, bypassing GC runtime.
-- make mput insert the value with given mtime
+- Allocate critical memory directly with system calls and manage them manually, bypassing GC runtime
+- Write test files and refactor the codebase
 
 ## Help
 ```
@@ -75,7 +78,7 @@ ls <dpath>               - Print the items in the path in vault
 cd <dpath>               - Change the current directory to the given path in vault
 lsall <dpath>            - List all the keys in the given dir and in all of it's subdirs
 
-senv <name> <value>      - Set an environment variable in the shell session
+senv <name> <value>      - Set an environment variable in the shell session and write to stdout
 genv <name>              - Get an environment variable from the session
 renv <name>              - Wipe an environment variable from the memory securely
 ```
@@ -93,32 +96,33 @@ For example, this shell command adds a `cget` shortcut which executes `get {1} |
 - `cget /github/name`
 
 ## Import & Export
-It's convenient to use a flat list of `[entry path] [base64 encoded value] [modification time]` separated with `\n` on imports and exports. So `migration.sh` folder contains helper scripts that use this format. (requires base64 binary)
+It's convenient to use a flat list of `[entry path] [base64 encoded value] [modification time]` separated with `\n` on imports and exports. So `migration.sh` folder contains helper scripts using this format. (requires base64 binary)
 
 To export everything in this flat list format, use the following command in shell:
 
-`lsall | iter "senv EXPORT | exec /path/to/exporter.sh $(genv EXPORT) $(genv EXPORT | get | exec base64 | exec tr -d '\n') $(genv EXPORT | mtime)"`
+`lsall / | iter "senv EXPORT | get | exec /path/to/exporter.sh $(genv EXPORT) $(genv EXPORT | mtime)"`
 
 - `lsall /`: Prints every entry in the vault
 - `iter [cmd]`: Iterates on them line by line and executes the command
-- `senv EXPORT`: Sets the entry path as an environment variable
-- `exec /path/to/exporter.sh $(genv EXPORT) $(genv EXPORT | get | exec base64 | exec tr -d '\n') $(genv EXPORT | mtime)"`: Execute exporter.sh with entrypath, base64 encoded value and modification time as arguments.
+- `senv EXPORT`: Sets the entry path as an environment variable, also writes it to output
+- `get`: Gets the entry value from that output
+- `exec /path/to/exporter.sh $(genv EXPORT) $(genv EXPORT | mtime)"`: Executes exporter.sh with stdin from get and path and modification time as arguments
 
 To import everything from it, use the following command in shell:
 
 `exec cat /path/to/sec2m.export | iter "exec /path/to/importer.sh | mput"`
 
-- `exec cat /path/to/sec2m.export`: Prints all the path/value pairs.
+- `exec cat /path/to/sec2m.export`: Prints all the lines in sec2m.export
 - `iter [cmd]`: Iterates on them line by line and executes the command
 - `exec /path/to/importer.sh`: Reads the line, decodes the base64 value and writes the path, mtime and value as arguments to mput
 - `mput` Puts the value to the vault according to given arguments
 
 ### Migrating From `.kdbx`
-`migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to a flat `path -> base64 value` list. Then, you can use the command above to import it.
+`migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to the flat list. Then, you can use the command above to import it.
 - Note: It's actually a go code wrapped in a shell script. Make sure you installed go.
 
 ## `.sdb` Format
-The `.sdb` format uses compack, a protobuf like binary encoding protocol with 1-bit wire-type, for the file according to the following scheme:
+The `.sdb` format uses compack, a protobuf like binary encoding protocol with 1-bit wire-type, according to the following schema:
 
 ```go
 type File struct {
@@ -138,12 +142,12 @@ type UnmarshaledHeader struct {
 	HashAlgo uint64 `cmpck:"6"`  // Hash algorithm used in signatures and key derivation
 }
 type UnencryptedBody struct {
-	Entries []Entry `cmpck:"1"`
+	Entries []Entry `cmpck:"1"` // alphabetically sorted list of entries by path
 }
 type Entry struct {
 	Path []byte `cmpck:"1"` // The front coded path of the entry (decoded in session)
 	Value []byte `cmpck:"2"`  // The value encrypted with inner key
-	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
+	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian]). It MUST be always larger than the previous MTime value of the entry
 }
 type Argon2IDParams struct {
 	Iterations uint32 `cmpck:"1"` // Iterations
@@ -158,7 +162,7 @@ Password: The input user writes in
 Salt: A random set of bytes created on vault initialization. It's permanent per vault. Guarantees that the derived key is completely unique per vault, even if two vaults use the identical password.
 
 Nonce(): A random set of bytes. Generated uniquely from scratch for every single encryption operation. Ensures that saving the vault generates unique ciphertext every time, even if the data inside hasn't changed.
-FieldNonce(): HashAlgorithm(MTime || EntryPath).NonceSize() Unique on every save because of MTime
+FieldNonce(): HashAlgorithm(MTime || EntryPath).NonceSize() Unique as mtime is strictly different on each save
 
 DerivedKey = KeyDerivationAlgorithm(password, salt)
 

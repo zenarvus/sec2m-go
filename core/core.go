@@ -100,7 +100,7 @@ type UnmarshaledHeader struct {
 	HashAlgo uint64 `cmpck:"6"`  // Hash algorithm used in signatures and key derivation
 }
 type UnencryptedBody struct {
-	Entries []Entry `cmpck:"1"`
+	Entries []Entry `cmpck:"1"` // alphabetically sorted list of entries by path
 }
 type Entry struct {
 	Path []byte `cmpck:"1"` // The front coded path of the entry (decoded in session)
@@ -622,25 +622,42 @@ func (s *Session) Get(key string) ([]byte, error) {
 	return value, nil
 }
 
-// Add a key/value pair. Give error if it already exists.
-func (s *Session) Put(epath string, value []byte) error {
+// If an entry does not exist, add it directly with given mtime. If mtime is empty, use the current time
+// If an entry exists, add it only if provided mtime is bigger than the existing one. If no mtime is provided, give already exists error.
+func (s *Session) Put(epath string, mtime []byte, value []byte) error {
 	// key must be an absolute filepath like string. (no slash at the end)
 	if !PathRegexp.MatchString(epath) || strings.HasSuffix(epath, "/") { return errors.New("path must be a file path string") }
 
 	// If it does not have slash at the start, join it to the current working directory.
 	if !strings.HasPrefix(epath, "/") { epath = filepath.Join(s.Pwd, epath) }
 
-	_,exists := s.EntryMap[epath]
+	existingEntry,exists := s.EntryMap[epath]
 
-	if exists { return errors.New("key already exists") }
+	var mTimeBytes = make([]byte, 8)
+
+	// If an entry already exists and mtime is not provided
+	if exists && len(mtime) == 0 {
+		return errors.New("key already exists")
+
+	// If an entry exists and mtime is provided
+	} else if exists {
+		// Set mTimeBytes only if given mtime is higher than entry's mtime
+		if bytes.Compare(mtime, existingEntry.MTime) == 1 {
+			mTimeBytes = mtime
+		// If provided entry has a lower mtime, do not insert it
+		} else { return nil }
+
+	// If an entry does not exists
+	} else {
+		mTime := time.Now().UTC().UnixMilli()
+		binary.LittleEndian.PutUint64(mTimeBytes, uint64(mTime))
+	}
+
+	// mTimeBytes is set when we reach here
 
 	// Decrypt the inner encryption key
 	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
-
-	mTime := time.Now().UTC().UnixMilli()
-	var mTimeBytes = make([]byte, 8)
-	binary.LittleEndian.PutUint64(mTimeBytes, uint64(mTime))
 
 	nonce,err := polysha.HashRaw(
 		polysha.SHAType(s.Header.HashAlgo),
@@ -665,27 +682,31 @@ func (s *Session) Put(epath string, value []byte) error {
 	return nil
 }
 
-// Update a key/value pair. Give error if it does not exist.
+// Update a key/value pair. Give error if it does not exist or modification times are the same
 func (s *Session) Update(epath string, value []byte) error {
 	// path must be an absolute filepath like string. (no slash at the end)
 	if !PathRegexp.MatchString(epath) || strings.HasSuffix(epath, "/") { return errors.New("path must be an file path string") }
 	// If it does not have slash at the start, join it to the current working directory.
 	if !strings.HasPrefix(epath, "/") { epath = filepath.Join(s.Pwd, epath) }
 
-	_,exists := s.EntryMap[epath]
+	existingEntry,exists := s.EntryMap[epath]
 
 	if !exists { return errors.New("key does not exist") }
 
 	// Zero the old values
 	ZeroBytes(s.EntryMap[epath].Value)
 
-	// Decrypt the inner encryption key
-	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
-	if err != nil {return err}
-
 	mTime := time.Now().UTC().UnixMilli()
 	var mTimeBytes = make([]byte, 8)
 	binary.LittleEndian.PutUint64(mTimeBytes, uint64(mTime))
+
+	if bytes.Equal(mTimeBytes, existingEntry.MTime) {
+		return errors.New("modification time cannot be the same")
+	}
+
+	// Decrypt the inner encryption key
+	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
+	if err != nil {return err}
 
 	nonce,err := polysha.HashRaw(
 		polysha.SHAType(s.Header.HashAlgo),
@@ -781,7 +802,7 @@ func (s *Session) Mv(oldKey, newKey string) error {
 	if err != nil {return err}
 	defer ZeroBytes(value) // Clean even if s.Put() returns without clearing value.
 
-	err = s.Put(newKey, value)
+	err = s.Put(newKey, entry.MTime, value)
 	if err != nil {return err}
 
 	err = s.Rm(oldKey)

@@ -36,7 +36,14 @@ import (
 	"github.com/zenarvus/sec2m-go/platforms"
 	"golang.org/x/term"
 )
+/*
+const (
+	CMD_INIT_DESC = "Init the vault file in the location provided with VAULT environment variable."
+	CMD_INIT_USAGE = "'init <dalg> <ealg> <halg>':"
 
+	CMD_CHANGE_DESC = ""
+)
+*/
 func printMainHelp() {
 	fmt.Println("Usage: VAULT=/path/to/file sec2m <command> [args...]")
 	fmt.Println()
@@ -89,7 +96,7 @@ func printCommonHelp() {
 	fmt.Println("cd <dpath>               - Change the current directory to the given path in vault")
 	fmt.Println("lsall <dpath>            - List all the keys in the given dir and in all of it's subdirs")
 	fmt.Println()
-	fmt.Println("senv <name> <value>      - Set an environment variable in the shell session")
+	fmt.Println("senv <name> <value>      - Set an environment variable in the shell session and write to stdout")
 	fmt.Println("genv <name>              - Get an environment variable from the session")
 	fmt.Println("renv <name>              - Wipe an environment variable from the memory securely")
 }
@@ -431,11 +438,11 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			return []byte{}, errors.New("Usage: <?stdin:epath:\n:value> | put <?epath> <?value>\n"+err.Error())
 		}
 
-		err = sess.Put(string(putArgs[0]), putArgs[1])
+		err = sess.Put(string(putArgs[0]), []byte{}, putArgs[1])
 		if err != nil { return []byte{}, err }
 		err = sess.Save()
 		if err != nil { return []byte{}, errors.New("Error while saving changes: "+err.Error()) }
-		return []byte("Insertion successful\n"), nil
+		return []byte("inserted: "+string(putArgs[0])+"\n"), nil
 	
 	case "mput":
 
@@ -451,30 +458,16 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		newMtimeInt, err := strconv.ParseUint(string(newMtime), 10, 64)
 		if err != nil { return []byte{}, errors.New("invalid mtime format") }
 
-		entry, exists := sess.EntryMap[string(epath)]
-		// If it does not exist, add it directly
-		if !exists {
-			err = sess.Put(string(epath), value)
-			if err != nil { return []byte{}, err }
-			err = sess.Save()
-			if err != nil { return []byte{}, errors.New("Error while saving changes: "+err.Error()) }
-			return []byte("Insertion successful\n"), nil
-		// If it already exists, insert only if provided mtime is higher
-		} else {
-			// format entry.MTime as unix epoch in seconds and do byte comparison
-			mtimeInt := binary.LittleEndian.Uint64(entry.MTime)
+		var newMtimeBytes = make([]byte, 8)
+		binary.LittleEndian.PutUint64(newMtimeBytes, newMtimeInt)
 
-			if newMtimeInt > mtimeInt {
-				err = sess.Put(string(epath), value)
-				if err != nil { return []byte{}, err }
-				err = sess.Save()
-				if err != nil { return []byte{}, errors.New("Error while saving changes: "+err.Error()) }
-				return []byte("Insertion successful\n"), nil
-			}
-		}
+		err = sess.Put(string(epath), newMtimeBytes, value)
+		if err != nil { return []byte{}, err }
+		err = sess.Save()
+		if err != nil { return []byte{}, errors.New("Error while saving changes: "+err.Error()) }
+		return []byte("inserted: "+string(epath)+"\n"), nil
 
 	case "update":
-
 		updateArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, true)
 		if err != nil {
 			return []byte{}, errors.New("Usage: <?stdin:epath:\n:value> | update <?epath> <?value>\n"+err.Error())
@@ -491,7 +484,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			if err != nil { return []byte{}, err }
 			err = sess.Save()
 			if err != nil { return []byte{}, errors.New("Error while saving changes: "+err.Error()) }
-			return []byte("Insertion successful\n"), nil
+			return []byte("updated: "+string(epath)+"\n"), nil
 
 		} else { return []byte("Update attempt cancelled\n"), nil }
 	
@@ -744,7 +737,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		}
 
 		sess.EnvMap[string(senvArgs[0])] = bytes.Clone(senvArgs[1])
-		return []byte{}, nil
+		return bytes.Clone(senvArgs[1]), nil
 
 	case "genv":
 		genvArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
