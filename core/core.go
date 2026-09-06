@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +46,7 @@ import (
 )
 
 // POSIX portable filepaths.
-var pathRegexp = regexp.MustCompile(`^/?([a-zA-Z0-9._\-]+/?)*$`) // Regexp that matches path like strings. Must not contain "/" at the end)
+var PathRegexp = regexp.MustCompile(`^/?([a-zA-Z0-9._\-]+/?)*$`) // Regexp that matches path like strings. Must not contain "/" at the end)
 // Filepaths must be absolute and must NOT contain a slash at the end.
 // Dirpaths must be absolute and must contain a slash at the end
 
@@ -102,9 +103,8 @@ type UnencryptedBody struct {
 	Entries []Entry `cmpck:"1"`
 }
 type Entry struct {
-	Path string `cmpck:"1"` // The path of the entry
+	Path []byte `cmpck:"1"` // The front coded path of the entry (decoded in session)
 	Value []byte `cmpck:"2"`  // The value encrypted with inner key
-	Nonce []byte `cmpck:"3"` // The nonce used to encrypt the value
 	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
 }
 type Argon2IDParams struct {
@@ -135,7 +135,8 @@ type Session struct {
 
 	Pwd string // The current working directory in entries. For navigation in the pseudo filesystem.
 
-	EntryMap map[string]*Entry // Entry.Path -> Entry map
+	EntryMap map[string]*Entry // FrontDecoded(Entry.Path) -> Entry map
+	EnvMap map[string][]byte // Environment variable map
 }
 
 /////////////////////////////////////////////
@@ -184,6 +185,7 @@ func InitSession(
 			// SENonce is created in sess.Save() and changed on every save. It's only needed for decrypting files.
 		},
 		EntryMap: make(map[string]*Entry),
+		EnvMap: make(map[string][]byte),
 
 		Pwd: "/",
 	}
@@ -212,19 +214,19 @@ func InitSession(
 
 	ZeroBytes(derivedKey)
 
-	encOutNonce,encOutEncKey,err := encryptData(outenckey, sess.SessionKey, sess.Header.SEAlgo)
+	encOutNonce,encOutEncKey,err := encryptData(outenckey, sess.SessionKey, nil, sess.Header.SEAlgo)
 	if err != nil {return nil, err}
 
 	sess.EncryptedOutEncKey = encOutEncKey
 	sess.OutEncKeyNonce = encOutNonce
 
-	encInnNonce,encInnEncKey,err := encryptData(innenckey, sess.SessionKey, sess.Header.SEAlgo)
+	encInnNonce,encInnEncKey,err := encryptData(innenckey, sess.SessionKey, nil, sess.Header.SEAlgo)
 	if err != nil {return nil, err}
 
 	sess.EncryptedInnEncKey = encInnEncKey
 	sess.InnEncKeyNonce = encInnNonce
 
-	encMacNonce,encMacKey,err := encryptData(mackey, sess.SessionKey, sess.Header.SEAlgo)
+	encMacNonce,encMacKey,err := encryptData(mackey, sess.SessionKey, nil, sess.Header.SEAlgo)
 	if err != nil {return nil, err}
 
 	sess.EncryptedMacKey = encMacKey
@@ -252,6 +254,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 
 	var sess = &Session{
 		EntryMap: make(map[string]*Entry),
+		EnvMap: make(map[string][]byte),
 		Pwd: "/",
 	}
 	sess.Filepath = filepath
@@ -302,7 +305,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 
 	// Encrypt vault keys with session key and save to session
 
-	encOutNonce,encOutEncKey,err := encryptData(outenckey, sess.SessionKey, sess.Header.SEAlgo)
+	encOutNonce,encOutEncKey,err := encryptData(outenckey, sess.SessionKey, nil, sess.Header.SEAlgo)
 	if err != nil {
 		sess.Destroy()
 		return nil, err
@@ -310,7 +313,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	sess.EncryptedOutEncKey = encOutEncKey
 	sess.OutEncKeyNonce = encOutNonce
 
-	encInnNonce,encInnEncKey,err := encryptData(innenckey, sess.SessionKey, sess.Header.SEAlgo)
+	encInnNonce,encInnEncKey,err := encryptData(innenckey, sess.SessionKey, nil, sess.Header.SEAlgo)
 	ZeroBytes(innenckey) // We do not need innenckey when loading the session.
 	if err != nil {
 		sess.Destroy()
@@ -319,7 +322,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	sess.EncryptedInnEncKey = encInnEncKey
 	sess.InnEncKeyNonce = encInnNonce
 
-	encMacNonce,encMacKey,err := encryptData(mackey, sess.SessionKey, sess.Header.SEAlgo)
+	encMacNonce,encMacKey,err := encryptData(mackey, sess.SessionKey, nil, sess.Header.SEAlgo)
 	if err != nil {
 		sess.Destroy()
 		return nil, err
@@ -363,8 +366,14 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	}
 
 	// Load file entries to the session.
+	var prev string
 	for _,entry := range unencryptedBody.Entries {
-		sess.EntryMap[entry.Path] = &entry
+		decoded, err := FrontDecode(prev, entry.Path)
+		if err != nil {return nil, err}
+		prev = decoded
+		entry.Path = []byte(decoded)
+		sess.EntryMap[decoded] = &entry
+		
 	}
 
 	return sess, nil
@@ -379,6 +388,7 @@ func (s *Session) VaultChange(
 	oldDerivedKey, err := deriveKey(
 		oldpass, s.Header.KDSalt, s.Header.KDAlgo, s.Header.SEAlgo, s.Header.KDParams,
 	)
+	defer ZeroBytes(oldDerivedKey)
 	if err != nil {return err}
 
 	// It's enough to check if inner encryption key is equal.
@@ -386,6 +396,7 @@ func (s *Session) VaultChange(
 	_,_,oldInnerEncKey,_,err := getVaultKeys(
 		oldDerivedKey, polysha.SHAType(s.Header.HashAlgo), s.Header.SEAlgo,
 	)
+	defer ZeroBytes(oldInnerEncKey)
 	ZeroBytes(oldDerivedKey);
 	if err != nil { return err }
 
@@ -442,14 +453,14 @@ func (s *Session) VaultChange(
 	s.SessionKey = newSessK
 
 	// Encrypt the new outer encryption key and save to the session
-	outerNonce, encOuterKey, err := encryptData(newOutEncK, s.SessionKey, s.Header.SEAlgo)
+	outerNonce, encOuterKey, err := encryptData(newOutEncK, s.SessionKey, nil, s.Header.SEAlgo)
 	ZeroBytes(newOutEncK) // We do not need the raw key anymore. Empty it.
 	if err != nil { return err }
 	s.OutEncKeyNonce = outerNonce
 	s.EncryptedOutEncKey = encOuterKey
 
 	// Encrypt the new mac key and save to the session
-	macNonce, encMacKey, err := encryptData(newMacK, s.SessionKey, s.Header.SEAlgo)
+	macNonce, encMacKey, err := encryptData(newMacK, s.SessionKey, nil, s.Header.SEAlgo)
 	ZeroBytes(newMacK) // We do not need the raw key anymore. Empty it.
 	if err != nil { return err }
 	s.MacKeyNonce = macNonce
@@ -457,29 +468,33 @@ func (s *Session) VaultChange(
 
 	// Update the inner encryptions from old to new
 	for _,entry := range s.EntryMap {
+		nonce,err := polysha.HashRaw(
+			polysha.SHAType(s.Header.HashAlgo),
+			append(entry.MTime, entry.Path...),
+		)
+		if err != nil { return err }
+
 		// Decrypt the value using old parameters
-		plaintextVal, err := unencryptData(entry.Value, entry.Nonce, oldInnerEncKey, oldEncAlgo)
+		plaintextVal, err := unencryptData(entry.Value, nonce, oldInnerEncKey, oldEncAlgo)
 		if err != nil {
 			ZeroBytes(plaintextVal)
 			return err
 		}
 		
 		// Encrypt it with the new ones
-		newValNonce, newVal, err := encryptData(plaintextVal, newInnEncK, s.Header.SEAlgo)
+		_, newVal, err := encryptData(plaintextVal, newInnEncK, nonce, s.Header.SEAlgo)
 		if err != nil {
 			ZeroBytes(plaintextVal)
 			return err
 		}
-
 		entry.Value = newVal
-		entry.Nonce = newValNonce
 
 		ZeroBytes(plaintextVal)
 
 	}
 
 	// Encrypt the new inner encryption key and save to the session
-	innerNonce, encInnerKey, err := encryptData(newInnEncK, s.SessionKey, s.Header.SEAlgo)
+	innerNonce, encInnerKey, err := encryptData(newInnEncK, s.SessionKey, nil, s.Header.SEAlgo)
 	ZeroBytes(newInnEncK) // We do not need the raw key anymore. Empty it.
 	if err != nil { return err }
 	s.InnEncKeyNonce = innerNonce
@@ -503,10 +518,23 @@ func (s *Session) SaveAs(filepath string) error {
 
 	var fileStruct = &File{}
 
+	var sortedPathList = make([]string, 0, len(s.EntryMap))
+	for epath := range s.EntryMap {
+		sortedPathList = append(sortedPathList, epath)
+	}
+	sort.Slice(sortedPathList, func(i, j int) bool {
+		return sortedPathList[i] < sortedPathList[j]
+	})
+
 	// Create an unencryptedBody with len(s.EntryMap) capacity
 	var unencryptedBody = &UnencryptedBody{ Entries: make([]Entry, 0, len(s.EntryMap)) }
-	for _,entry := range s.EntryMap {
-		unencryptedBody.Entries = append(unencryptedBody.Entries, *entry)
+	var prev string
+	for _,epath := range sortedPathList {
+		// Front code the path
+		entry := *s.EntryMap[epath]
+		entry.Path = FrontCode(prev, epath)
+		prev = epath
+		unencryptedBody.Entries = append(unencryptedBody.Entries, entry)
 	}
 
 	unencryptedBodyBytes, err := cmpck.Marshal(unencryptedBody, cmpck.EncOpts{Canonical:true})
@@ -518,7 +546,7 @@ func (s *Session) SaveAs(filepath string) error {
 	if err != nil {return err}
 
 	// Encrypt the body using outEncKey
-	nonce,encryptedData, err := encryptData(unencryptedBodyBytes, outEncKey, s.Header.SEAlgo)
+	nonce,encryptedData, err := encryptData(unencryptedBodyBytes, outEncKey, nil, s.Header.SEAlgo)
 	ZeroBytes(outEncKey) // Remove outenckey from memory.
 	if err!=nil{return err}
 
@@ -566,7 +594,7 @@ func (s *Session) SaveAs(filepath string) error {
 // Get the value using key.
 func (s *Session) Get(key string) ([]byte, error) {
 	// key must be a file path string.
-	if !pathRegexp.MatchString(key) || strings.HasSuffix(key, "/") {
+	if !PathRegexp.MatchString(key) || strings.HasSuffix(key, "/") {
 		return nil, errors.New("key must be a filepath string")
 	}
 	// If it does not have slash at the start, join it to the current working directory.
@@ -580,8 +608,14 @@ func (s *Session) Get(key string) ([]byte, error) {
 	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return nil, err}
 
+	nonce,err := polysha.HashRaw(
+		polysha.SHAType(s.Header.HashAlgo),
+		append(entry.MTime, entry.Path...),
+	)
+	if err != nil {return nil, err}
+
 	// Decrypt and return the value with the inner encryption key
-	value, err := unencryptData(entry.Value, entry.Nonce, innEncKey, s.Header.SEAlgo)
+	value, err := unencryptData(entry.Value, nonce, innEncKey, s.Header.SEAlgo)
 	ZeroBytes(innEncKey)
 	if err != nil {return nil,err}
 
@@ -589,14 +623,14 @@ func (s *Session) Get(key string) ([]byte, error) {
 }
 
 // Add a key/value pair. Give error if it already exists.
-func (s *Session) Put(key string, value []byte) error {
+func (s *Session) Put(epath string, value []byte) error {
 	// key must be an absolute filepath like string. (no slash at the end)
-	if !pathRegexp.MatchString(key) || strings.HasSuffix(key, "/") { return errors.New("path must be a file path string") }
+	if !PathRegexp.MatchString(epath) || strings.HasSuffix(epath, "/") { return errors.New("path must be a file path string") }
 
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(key, "/") { key = filepath.Join(s.Pwd, key) }
+	if !strings.HasPrefix(epath, "/") { epath = filepath.Join(s.Pwd, epath) }
 
-	_,exists := s.EntryMap[key]
+	_,exists := s.EntryMap[epath]
 
 	if exists { return errors.New("key already exists") }
 
@@ -604,60 +638,69 @@ func (s *Session) Put(key string, value []byte) error {
 	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
-	// Encrypt the value with the key
-	nonce, chiphertext, err := encryptData(value, innEncKey, s.Header.SEAlgo)
-	ZeroBytes(innEncKey)
-	ZeroBytes(value)
-	if err != nil {return err}
-
 	mTime := time.Now().UTC().UnixMilli()
 	var mTimeBytes = make([]byte, 8)
 	binary.LittleEndian.PutUint64(mTimeBytes, uint64(mTime))
 
+	nonce,err := polysha.HashRaw(
+		polysha.SHAType(s.Header.HashAlgo),
+		append(mTimeBytes, []byte(epath)...),
+	)
+	if err != nil {return err}
+
+	// Encrypt the value with the key
+	_, chiphertext, err := encryptData(value, innEncKey, nonce, s.Header.SEAlgo)
+	ZeroBytes(innEncKey)
+	ZeroBytes(value)
+	if err != nil {return err}
+
 	var newEntry = &Entry{
-		Path: key,
+		Path: []byte(epath),
 		Value: chiphertext,
-		Nonce: nonce,
 		MTime: mTimeBytes,
 	}
 
-	s.EntryMap[key] = newEntry
+	s.EntryMap[epath] = newEntry
 
 	return nil
 }
 
 // Update a key/value pair. Give error if it does not exist.
-func (s *Session) Update(key string, value []byte) error {
+func (s *Session) Update(epath string, value []byte) error {
 	// path must be an absolute filepath like string. (no slash at the end)
-	if !pathRegexp.MatchString(key) || strings.HasSuffix(key, "/") { return errors.New("path must be an file path string") }
+	if !PathRegexp.MatchString(epath) || strings.HasSuffix(epath, "/") { return errors.New("path must be an file path string") }
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(key, "/") { key = filepath.Join(s.Pwd, key) }
+	if !strings.HasPrefix(epath, "/") { epath = filepath.Join(s.Pwd, epath) }
 
-	_,exists := s.EntryMap[key]
+	_,exists := s.EntryMap[epath]
 
 	if !exists { return errors.New("key does not exist") }
 
 	// Zero the old values
-	ZeroBytes(s.EntryMap[key].Value)
-	ZeroBytes(s.EntryMap[key].Nonce)
+	ZeroBytes(s.EntryMap[epath].Value)
 
 	// Decrypt the inner encryption key
 	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
-	if err != nil {return err}
-
-	// Encrypt the new value with the key
-	nonce, chiphertext, err := encryptData(value, innEncKey, s.Header.SEAlgo)
-	ZeroBytes(innEncKey)
-	ZeroBytes(value)
 	if err != nil {return err}
 
 	mTime := time.Now().UTC().UnixMilli()
 	var mTimeBytes = make([]byte, 8)
 	binary.LittleEndian.PutUint64(mTimeBytes, uint64(mTime))
 
-	s.EntryMap[key].Value = chiphertext
-	s.EntryMap[key].Nonce = nonce
-	s.EntryMap[key].MTime = mTimeBytes
+	nonce,err := polysha.HashRaw(
+		polysha.SHAType(s.Header.HashAlgo),
+		append(mTimeBytes, []byte(epath)...),
+	)
+	if err != nil {return err}
+
+	// Encrypt the new value with the key
+	_, chiphertext, err := encryptData(value, innEncKey, nonce, s.Header.SEAlgo)
+	ZeroBytes(innEncKey)
+	ZeroBytes(value)
+	if err != nil {return err}
+
+	s.EntryMap[epath].Value = chiphertext
+	s.EntryMap[epath].MTime = mTimeBytes
 
 	return nil
 }
@@ -665,7 +708,7 @@ func (s *Session) Update(key string, value []byte) error {
 // Delete a field with key. Give error if it does not exists.
 func (s *Session) Rm(key string) error {
 	// path must be an absolute filepath like string.
-	if !pathRegexp.MatchString(key) || strings.HasSuffix(key, "/") { return errors.New("path must be a file path string") }
+	if !PathRegexp.MatchString(key) || strings.HasSuffix(key, "/") { return errors.New("path must be a file path string") }
 	// If it does not have slash at the start, join it to the current working directory.
 	if !strings.HasPrefix(key, "/") { key = filepath.Join(s.Pwd, key) }
 
@@ -675,7 +718,6 @@ func (s *Session) Rm(key string) error {
 
 	// Zero the values
 	ZeroBytes(s.EntryMap[key].Value)
-	ZeroBytes(s.EntryMap[key].Nonce)
 
 	delete(s.EntryMap, key)
 
@@ -687,7 +729,7 @@ func (s *Session) Rmd(dirPath string) error {
 	if dirPath == "" { return errors.New("dirpath cannot be empty.") }
 
 	// dirPath must start and end with "/"
-	if !pathRegexp.MatchString(dirPath) { return errors.New("malformed folder path. It should be POSIX portable path.") }
+	if !PathRegexp.MatchString(dirPath) { return errors.New("malformed folder path. It should be POSIX portable path.") }
 	// If it does not have slash at the start, join it to the current working directory.
 	if !strings.HasPrefix(dirPath, "/") { dirPath = filepath.Join(s.Pwd, dirPath) }
 	// if it does not have slash at the end, add it.
@@ -700,7 +742,6 @@ func (s *Session) Rmd(dirPath string) error {
 			folderExists = true
 			
 			ZeroBytes(s.EntryMap[key].Value)
-			ZeroBytes(s.EntryMap[key].Nonce)
 			delete(s.EntryMap, key)
 		}
 	}
@@ -712,7 +753,7 @@ func (s *Session) Rmd(dirPath string) error {
 
 func (s *Session) Mv(oldKey, newKey string) error {
 	// paths must be an absolute filepath like string.
-	if (!pathRegexp.MatchString(oldKey) || strings.HasSuffix(oldKey, "/")) || (!pathRegexp.MatchString(newKey) || strings.HasSuffix(newKey, "/")) {
+	if (!PathRegexp.MatchString(oldKey) || strings.HasSuffix(oldKey, "/")) || (!PathRegexp.MatchString(newKey) || strings.HasSuffix(newKey, "/")) {
 		return errors.New("path must be a file path string")
 	}
 	// If it does not have slash at the start, join it to the current working directory.
@@ -727,9 +768,15 @@ func (s *Session) Mv(oldKey, newKey string) error {
 	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
+	nonce,err := polysha.HashRaw(
+		polysha.SHAType(s.Header.HashAlgo),
+		append(entry.MTime, entry.Path...),
+	)
+	if err != nil {return err}
+
 	// Decrypt the value with the inner encryption key.
 	// Put needs it in plaintext.
-	value, err := unencryptData(entry.Value, entry.Nonce, innEncKey, s.Header.SEAlgo)
+	value, err := unencryptData(entry.Value, nonce, innEncKey, s.Header.SEAlgo)
 	ZeroBytes(innEncKey)
 	if err != nil {return err}
 	defer ZeroBytes(value) // Clean even if s.Put() returns without clearing value.
@@ -748,7 +795,7 @@ func (s *Session) Cd(dirPath string) error {
 	if dirPath == "" { dirPath = "/" }
 
 	// dirPath must start and end with "/"
-	if !pathRegexp.MatchString(dirPath) { return errors.New("malformed folder path. It should be POSIX portable path.") }
+	if !PathRegexp.MatchString(dirPath) { return errors.New("malformed folder path. It should be POSIX portable path.") }
 	// If it does not have slash at the start, join it to the current working directory.
 	if !strings.HasPrefix(dirPath, "/") { dirPath = filepath.Join(s.Pwd, dirPath) }
 	// if it does not have slash at the end, add it.
@@ -770,7 +817,7 @@ func (s *Session) Ls(dirPath string) ([]string, []string, error) {
 	if dirPath == "" { dirPath = s.Pwd }
 
 	// dirPath must start and end with "/"
-	if !pathRegexp.MatchString(dirPath) { return nil, nil, errors.New("malformed folder path. It should be POSIX portable path.") }
+	if !PathRegexp.MatchString(dirPath) { return nil, nil, errors.New("malformed folder path. It should be POSIX portable path.") }
 	// If it does not have slash at the start, join it to the current working directory.
 	if !strings.HasPrefix(dirPath, "/") { dirPath = filepath.Join(s.Pwd, dirPath) }
 	// if it does not have slash at the end, add it.
@@ -811,7 +858,7 @@ func (s *Session) Lsall(dirPath string) ([]string, error) {
 	if dirPath == "" { dirPath = s.Pwd }
 
 	// dirPath must start and end with "/"
-	if !pathRegexp.MatchString(dirPath) { return nil, errors.New("malformed folder path. It should be POSIX portable path.") }
+	if !PathRegexp.MatchString(dirPath) { return nil, errors.New("malformed folder path. It should be POSIX portable path.") }
 	// If it does not have slash at the start, join it to the current working directory.
 	if !strings.HasPrefix(dirPath, "/") { dirPath = filepath.Join(s.Pwd, dirPath) }
 	// if it does not have slash at the end, add it.
@@ -888,18 +935,12 @@ func getVaultKeys(
 	return sessionKey, out[:keylen], inn[:keylen], mac[:keylen], nil
 }
 
-func encryptData(plaintext []byte, enckey []byte, algorithm uint64) ([]byte, []byte, error) {
+func encryptData(plaintext []byte, enckey []byte, nonce []byte, algorithm uint64) ([]byte, []byte, error) {
 	switch algorithm {
 	case Encrypt_AES_CBC_256:
 		// Create AES block cipher
 		block, err := aes.NewCipher(enckey)
 		if err != nil { return nil, nil, err }
-
-		// Generate a random nonce
-		iv_nonce := make([]byte, aes.BlockSize)
-		if _, err := io.ReadFull(rand.Reader, iv_nonce); err != nil {
-			return nil, nil, err
-		}
 
 		// pad the plaintext data
 		pkcs7Pad := func(data []byte, blockSize int) []byte {
@@ -907,6 +948,18 @@ func encryptData(plaintext []byte, enckey []byte, algorithm uint64) ([]byte, []b
 			padtext := bytes.Repeat([]byte{byte(padding)}, padding)
 			return append(data, padtext...)
 		}
+
+		var iv_nonce = make([]byte, aes.BlockSize)
+		// Derive the nonce from provided variable or generate a random nonce if it's nil
+		if nonce != nil {
+			if len(nonce) < aes.BlockSize {
+				return nil, nil, errors.New("provided nonce does not satisfy the required size")
+			}
+			iv_nonce = nonce[:aes.BlockSize]
+		} else {
+			if _, err := io.ReadFull(rand.Reader, iv_nonce); err != nil { return nil, nil, err }
+		}
+
 		paddedPlaintext := pkcs7Pad(plaintext, block.BlockSize())
 
 		ciphertext := make([]byte, len(paddedPlaintext))
@@ -918,9 +971,14 @@ func encryptData(plaintext []byte, enckey []byte, algorithm uint64) ([]byte, []b
 		return iv_nonce, ciphertext, nil
 
 	case Encrypt_CHACHA20:
-		iv_nonce := make([]byte, chacha20.NonceSizeX)
-		if _, err := io.ReadFull(rand.Reader, iv_nonce); err != nil {
-			return nil, nil, err
+		iv_nonce := make([]byte, chacha20.NonceSizeX) // 24 byte
+		if nonce != nil {
+			if len(nonce) < chacha20.NonceSizeX {
+				return nil, nil, errors.New("provided nonce does not satisfy the required size")
+			}
+			iv_nonce = nonce[:chacha20.NonceSizeX]
+		} else {
+			if _, err := io.ReadFull(rand.Reader, iv_nonce); err != nil { return nil, nil, err }
 		}
 
 		cipher, err := chacha20.NewUnauthenticatedCipher(enckey, iv_nonce)
@@ -981,6 +1039,7 @@ func unencryptData(ciphertext []byte, iv_nonce []byte, enckey []byte, algorithm 
 
 	case Encrypt_CHACHA20:
 		// Ensure the nonce matches xchacha20's expectations
+		if len(iv_nonce) > chacha20.NonceSizeX { iv_nonce = iv_nonce[:chacha20.NonceSizeX] }
 		if len(iv_nonce) != chacha20.NonceSizeX {
 			return nil, errors.New("decryption failed: invalid nonce length for XChaCha20")
 		}
@@ -1066,4 +1125,32 @@ func getKeyDerivationParams(keyDerivationString string) (uint64, []byte, []byte,
 	} else {
 		return 0, nil, nil, errors.New("unsupported key derivation algorithm")
 	}
+}
+
+////////////////////////////////////
+
+// Compress a given string with front coding relative to the previous uncompressed string based on the common prefix length
+func FrontCode(prev string, str string) ([]byte) {
+	// We will iterate through one of them. We choose the one with less characters.
+	n := len(prev)
+	if len(str) < n {n = len(str)}
+
+	// get the common byte prefix length
+	i := 0
+	for i < n && prev[i] == str[i] { i++ }
+
+	// format: [varint prefix-length][remaining str suffix]
+	compressed := make([]byte, 0, binary.MaxVarintLen64+len(str)-1) // create a byte buffer capable of holding everything
+	compressed = binary.AppendUvarint(compressed, uint64(i)) // Write the prefix length matched
+	compressed = append(compressed, str[i:]...) // Append the rest of the string to the compressed form.
+
+	return compressed
+}
+// Decompress a given front coded string using the previous uncompressed string
+func FrontDecode(prev string, compressed []byte) (string, error) {
+	prefixLen, n := binary.Uvarint(compressed)
+	if n <= 0 { return "", errors.New("invalid or corrupted varint encoding") }
+	if len(prev) < int(prefixLen) { return "", errors.New("prefix length exceeds previous string length")}
+
+	return prev[:prefixLen]+string(compressed[n:]), nil
 }
