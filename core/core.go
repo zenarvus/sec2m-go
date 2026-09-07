@@ -693,16 +693,14 @@ func (s *Session) Update(epath string, value []byte) error {
 
 	if !exists { return errors.New("key does not exist") }
 
-	// Zero the old values
-	ZeroBytes(s.EntryMap[epath].Value)
+	mTimeNow := uint64(time.Now().UTC().UnixMilli())
 
-	mTime := time.Now().UTC().UnixMilli()
+	entryMtime := binary.LittleEndian.Uint64(existingEntry.MTime)
+
+	mTime := max(mTimeNow, entryMtime+1) // The current time or old entry mtime+1. Ensures it's always different
+
 	var mTimeBytes = make([]byte, 8)
 	binary.LittleEndian.PutUint64(mTimeBytes, uint64(mTime))
-
-	if bytes.Equal(mTimeBytes, existingEntry.MTime) {
-		return errors.New("modification time cannot be the same")
-	}
 
 	// Decrypt the inner encryption key
 	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
@@ -719,6 +717,9 @@ func (s *Session) Update(epath string, value []byte) error {
 	ZeroBytes(innEncKey)
 	ZeroBytes(value)
 	if err != nil {return err}
+
+	// Zero the old value
+	ZeroBytes(s.EntryMap[epath].Value)
 
 	s.EntryMap[epath].Value = chiphertext
 	s.EntryMap[epath].MTime = mTimeBytes
