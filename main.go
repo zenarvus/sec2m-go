@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ import (
 	"github.com/zenarvus/sec2m-go/platforms"
 	"golang.org/x/term"
 )
+
 /*
 const (
 	CMD_INIT_DESC = "Init the vault file in the location provided with VAULT environment variable."
@@ -402,6 +404,8 @@ func processCommandlist(sess *core.Session, args [][]byte, currentStdin []byte, 
 	return result, nil
 }
 
+var placeholderRegex = regexp.MustCompile(`\{\d+\}`) // Used to replace the placeholders in shortcuts
+
 // Process command processes the given command and return the stdout
 func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCommand bool) ([]byte, error) {
 	isOneshot := false
@@ -761,11 +765,14 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 		// If the shortcut has a value
 		if len(shortcutVal) > 0 {
-			// Replace placeholders {1}, {2}, etc. with provided arguments
+			// Replace placeholders {1}, {2}, etc. with provided arguments.
 			for i := 1; i < len(args); i++ {
 				placeholder := fmt.Sprintf("{%d}", i)
 				expanded = strings.ReplaceAll(expanded, placeholder, string(args[i]))
 			}
+
+			// Remove the remaining placeholders. This removes unused ones when no argument is passed etc.
+			expanded = placeholderRegex.ReplaceAllString(expanded, "")
 
 			// Parse the expanded shortcut string into arguments
 			expandedArgs, err := parseArgs([]byte(expanded))
@@ -845,7 +852,11 @@ func getArgsFromArgsNStdin(requiredCount int, givenargs [][]byte, stdin []byte, 
 	// Else, split stdin by newlines and add them as args until requiredCount is satisfied. If there is still more '\n' separated arguments left in stdinArgs, combine them in the last totalargs argument.
 	} else {
 		requiredArgsLeft := requiredCount - len(totalargs)
-		stdinArgs := bytes.Split(stdin, []byte{'\n'})
+		var stdinArgs [][]byte
+		// Only split stdinArgs if stdin is not empty. If we don't do that, bytes.Split returns stdinArgs with one empty slice item.
+		if len(stdin) > 0 {
+			stdinArgs = bytes.Split(stdin, []byte{'\n'})
+		}
 
 		// Give error if stdinArgs has not enough arguments to satisfy requiredArgsLeft
 		if !ask && len(stdinArgs) < requiredArgsLeft {return nil, errors.New("not enough arguments provided")}

@@ -20,7 +20,6 @@ fi
 
 generate_password() {
     tr -dc "$CHAR_SET" < /dev/urandom | head -c "$PASS_LEN"
-    echo
 }
 
 generate_password "$@"
