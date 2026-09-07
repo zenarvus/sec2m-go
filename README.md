@@ -1,6 +1,6 @@
 # Sec2M Secure Secrets Manager
 <p align="left">
-<img src="https://github.com/zenarvus/sec2m-go/raw/refs/heads/main/logo.png" width="150" alt="Sec2M Logo" align="left"/>
+<img src="https://github.com/zenarvus/sec2m-go/raw/refs/heads/main/logo.png" width="155" alt="Sec2M Logo" align="left"/>
 <h3>Got secrets to keep?</h3>
 <p>Sec2M is a CLI based, one-file secrets manager for cool kids who love security and minimalism.</p>
   

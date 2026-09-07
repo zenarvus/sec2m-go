@@ -150,6 +150,9 @@ func (s *Session) Destroy() {
 	for _, v := range s.EntryMap {
 		ZeroBytes(v.Value)
 	}
+	for _, v := range s.EnvMap {
+		ZeroBytes(v)
+	}
 	os.Remove(s.Filepath+".lock")
 }
 
@@ -523,7 +526,7 @@ func (s *Session) Save() error {
 }
 
 // Save the session entries to the given file.
-func (s *Session) SaveAs(filepath string) error {
+func (s *Session) SaveAs(filePath string) error {
 
 	var fileStruct = &File{}
 
@@ -590,12 +593,30 @@ func (s *Session) SaveAs(filepath string) error {
 	fileBytes, err := cmpck.Marshal(fileStruct, cmpck.EncOpts{Canonical:true})
 	if err!=nil {return err}
 
-	err = os.WriteFile(filepath+".tmp", fileBytes, 0600) // Only owner can read/write. First write to a temporary file.
-	if err!=nil {return err}
+	// Write filebytes to the disk
 
-	// If it's successful, overwrite the original file with the temporary one.
-	err = os.Rename(filepath+".tmp", filepath)
-	if err!=nil {return err}
+	// Open the temporary file. Only owner can read/write. First write to a temporary file.
+	f, err := os.OpenFile(filePath+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil { return err }
+	// write the data to the temporary file
+	_, err = f.Write(fileBytes)
+	if err != nil { f.Close(); os.Remove(filePath+".tmp"); return err }
+	// Sync the file content and metadata to storage hardware
+	if err := f.Sync(); err != nil { f.Close(); os.Remove(filePath+".tmp"); return err }
+	// close the opened file
+	if err := f.Close(); err != nil { os.Remove(filePath+".tmp"); return err }
+
+	// If everything is successful, overwrite the original file with the temporary one by performing an atomic rename.
+	err = os.Rename(filePath+".tmp", filePath)
+	if err!=nil { os.Remove(filePath+".tmp"); return err}
+
+	// sync the parent directory to persist the file system directory entry update
+	// because os.Rename updates the directory entry in cache
+	dir, err := os.Open(filepath.Dir(filePath))
+	if err != nil { return nil } // File is written, directory sync failure is usually non-fatal
+	defer dir.Close()
+
+	_ = dir.Sync()
 
 	return nil
 }
@@ -651,7 +672,9 @@ func (s *Session) Put(epath string, mtime []byte, value []byte) error {
 	// If an entry exists and mtime is provided
 	} else if exists {
 		// Set mTimeBytes only if given mtime is higher than entry's mtime
-		if bytes.Compare(mtime, existingEntry.MTime) == 1 {
+		givenmtime := binary.LittleEndian.Uint64(mtime)
+		existingmtime := binary.LittleEndian.Uint64(existingEntry.MTime)
+		if givenmtime > existingmtime {
 			mTimeBytes = mtime
 		// If provided entry has a lower mtime, do not insert it
 		} else { return nil }
