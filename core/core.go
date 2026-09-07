@@ -401,6 +401,7 @@ func (s *Session) VaultChange(
 	if err != nil { return err }
 
 	oldEncAlgo := s.Header.SEAlgo
+	oldHashAlgo := s.Header.HashAlgo // Required for generating nonces in decryption
 
 	// Decrypt the current inner encryption key
 	expectedInnEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
@@ -468,21 +469,29 @@ func (s *Session) VaultChange(
 
 	// Update the inner encryptions from old to new
 	for _,entry := range s.EntryMap {
-		nonce,err := polysha.HashRaw(
-			polysha.SHAType(s.Header.HashAlgo),
+		// the old nonce withold ""hashing algorithm
+		oldNonce,err := polysha.HashRaw(
+			polysha.SHAType(oldHashAlgo),
 			append(entry.MTime, entry.Path...),
 		)
 		if err != nil { return err }
 
 		// Decrypt the value using old parameters
-		plaintextVal, err := unencryptData(entry.Value, nonce, oldInnerEncKey, oldEncAlgo)
+		plaintextVal, err := unencryptData(entry.Value, oldNonce, oldInnerEncKey, oldEncAlgo)
 		if err != nil {
 			ZeroBytes(plaintextVal)
 			return err
 		}
+
+		// new nonce with new hash algorithm
+		newNonce,err := polysha.HashRaw(
+			polysha.SHAType(s.Header.HashAlgo),
+			append(entry.MTime, entry.Path...),
+		)
+		if err != nil { return err }
 		
 		// Encrypt it with the new ones
-		_, newVal, err := encryptData(plaintextVal, newInnEncK, nonce, s.Header.SEAlgo)
+		_, newVal, err := encryptData(plaintextVal, newInnEncK, newNonce, s.Header.SEAlgo)
 		if err != nil {
 			ZeroBytes(plaintextVal)
 			return err
@@ -1033,7 +1042,8 @@ func unencryptData(ciphertext []byte, iv_nonce []byte, enckey []byte, algorithm 
 
 		// Decrypt to paddedPlaintext using the key and iv_nonce
 		paddedPlaintext := make([]byte, len(ciphertext))
-		mode := cipher.NewCBCDecrypter(block, iv_nonce)
+		// iv_nonce can be anything aslong as its bigger than the aes blocksize. We get the first blocksize bytes
+		mode := cipher.NewCBCDecrypter(block, iv_nonce[:aes.BlockSize])
 		mode.CryptBlocks(paddedPlaintext, ciphertext)
 
 		// Unpad the plaintext and return it.

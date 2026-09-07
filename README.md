@@ -1,35 +1,40 @@
 # Sec2M Secure Secrets Manager
-<table>
-<tr>
-<td align="center" width="200"><img width="360" height="360" alt="A shame I can't read your mind" src="https://github.com/zenarvus/sec2m-go/raw/refs/heads/main/logo.png"/></td>
-<td><h3>Got secrets to keep? Sec2M is a CLI based, one-file secrets manager for cool kids who love security and minimalism.</h3></td>
-</tr>
-</table>
+<p align="left">
+<img src="https://github.com/zenarvus/sec2m-go/raw/refs/heads/main/logo.png" width="150" alt="Sec2M Logo" align="left"/>
+<h3>Got secrets to keep?</h3>
+<p>Sec2M is a CLI based, one-file secrets manager for cool kids who love security and minimalism.</p>
+  
+![GitHub Repo stars](https://img.shields.io/github/stars/zenarvus/sec2m-go?style=for-the-badge&color=darkred)
+![GitHub forks](https://img.shields.io/github/forks/zenarvus/sec2m-go?style=for-the-badge&color=darkred)
+![GitHub Issues](https://img.shields.io/github/issues/zenarvus/sec2m-go?style=for-the-badge&color=darkred)
+![GitHub License](https://img.shields.io/github/license/zenarvus/sec2m-go?style=for-the-badge&color=darkred)
+</p>
+<br clear="left"/>
 
 ## Features
-Everything stays local with a small and simple, Compack serialized `.sdb` file format
+\> Everything stays local with a small and simple, Compack serialized `.sdb` file format
 
-Strong and flexible cryptographic primitive list containing xchacha20, sha3-256 and argon2id
+\> Strong and flexible cryptographic primitive list containing xchacha20, sha3-256 and argon2id
 
-Whole file HMAC integrity check using the Encrypt-Then-MAC scheme
+\> Whole file HMAC integrity check using the Encrypt-Then-MAC scheme
 
-Additional per-value encryption for in-memory security
+\> Additional per-value encryption for in-memory security
 
-Per-Session-Key to store encryption and signature keys securely on memory
+\> Per-Session-Key to store encryption and signature keys securely on memory
 
-Core-dumping prevention and memory locking for the session key on supported platforms (android & linux)
+\> Core-dumping prevention and memory locking for the session key on supported platforms (android & linux)
 
-Explicit variable zeroing after usage (not when passed as literal command arguments)
+\> Explicit variable zeroing after usage (not when passed as literal command arguments)
 
-Extensible `[POSIX Portable Filepath] -> [Binary Value]` array structure. Like UNIX, everything is an entry
+\> Extensible `[POSIX Portable Filepath] -> [Binary Value]` array structure. Like UNIX, everything is an entry
 
-Shell like directory navigation using `cd`, `ls` and `lsall`
+\> Shell like directory navigation using `cd`, `ls` and `lsall`
 
-Internal shell session with auto completions, system binary execution, command substitutions and pipelines
+\> Internal shell session with auto completions, system binary execution, command substitutions and pipelines
 
-Command aliasing using the entries in `/.shortcut/`
+\> Command aliasing using the entries in `/.shortcut/`
 
-TOTP, Clipboard copy/clearing, password generation and more with helper scripts
+\> TOTP, Clipboard copy/clearing, password generation and more with helper scripts
 
 ## Installation
 Sec2M is a single binary application with no external runtime dependencies nor config files. You just need go and git to install it.
@@ -127,7 +132,7 @@ To import everything from it, use the following command in shell:
 - `exec /path/to/importer.sh`: Reads the line, decodes the base64 value and writes the path, mtime and value as arguments to mput
 - `mput` Puts the value to the vault according to given arguments
 
-### Migrating From KeePass*
+## Migrating From KeePass*
 `migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to the flat list. Then, you can use the command above to import it.
 - Note: It's actually a go code wrapped in a shell script. Make sure you installed go.
 
@@ -169,9 +174,9 @@ SDB stays small by using an optimized format: binary encoding for the file and f
 
 SDB's file structure is simpler and easier to implement from scratch. See: <https://keepass.info/help/download/KDBX_XML.xsd> and [SDB Format Section](#sdb-format).
 
-SDB does not care or know about what kind of values entries have. You can even represent KDBX format structure entirely within SDB (which would be bad imho). KDBX on the other hand, kind of enforces a set of values for a set of fields, and as it's not really flexible, also adds optional key/value fields, making things unnecessarily complex.
+SDB does not care or know about what kind of values entries have. You can even represent KDBX format structure entirely within SDB (which would be bad IMHO). KDBX on the other hand, kind of enforces a set of values for a set of fields, and as it's not really flexible, also adds optional key/value fields, making things unnecessarily complex.
 
-SDB's cryptography is simpler and cleaner than KDBX while providing roughly the same amount of security. See: <https://www.panicvault.org/keepass/kdbx-format-guide/> and [Cryptography Section](#cryptography)
+SDB's cryptography is simpler and cleaner than KDBX while providing roughly the same amount of security when implemented as intended. See: <https://www.panicvault.org/keepass/kdbx-format-guide/> and [Cryptography Section](#cryptography)
 
 KDBX uses chunked blocks, making it be able to handle with large vault files seamlessly, while SDB loads the whole file in memory. However, no proper vault reaches to megabytes of size unless you add PDF files or something in them, which is stupid anyway.
 
