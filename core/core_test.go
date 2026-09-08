@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zenarvus/sec2m-go/securemem"
 )
 
 const (
@@ -25,8 +27,8 @@ func TestFrontCodeDecode(t *testing.T) {
 
 	prev := ""
 	for _, tt := range tests {
-		compressed := FrontCode(prev, tt.curr)
-		decoded, err := FrontDecode(prev, compressed)
+		compressed := frontCode(prev, tt.curr)
+		decoded, err := frontDecode(prev, compressed)
 		if err != nil {
 			t.Fatalf("FrontDecode failed for '%s' with prev '%s': %v", tt.curr, prev, err)
 		}
@@ -37,7 +39,7 @@ func TestFrontCodeDecode(t *testing.T) {
 	}
 
 	// Test decoding error cases
-	_, err := FrontDecode("short", []byte{0x0a, 'x'}) // Prefix len 10 > prev len 5
+	_, err := frontDecode("short", []byte{0x0a, 'x'}) // Prefix len 10 > prev len 5
 	if err == nil {
 		t.Error("Expected error when prefix length exceeds previous string length, got nil")
 	}
@@ -46,13 +48,12 @@ func TestFrontCodeDecode(t *testing.T) {
 // Verifies memory clearing functionality.
 func TestZeroBytes(t *testing.T) {
 	data := []byte{1, 2, 3, 4, 5, 255, 128}
-	ZeroBytes(data)
+	securemem.ZeroBytes(data)
 	for i, b := range data {
 		if b != 0 { t.Errorf("Byte at index %d was not zeroed, got %d", i, b) }
 	}
-
 	// Ensure calling on nil does not panic
-	ZeroBytes(nil)
+	securemem.ZeroBytes(nil)
 }
 
 // Tests direct encryption and decryption across supported algorithms.
@@ -74,7 +75,7 @@ func TestLowLevelEncryption(t *testing.T) {
 				t.Fatalf("encryptData failed: %v", err)
 			}
 
-			decrypted, err := unencryptData(ciphertext, nonce, key, tc.algo)
+			decrypted,dealloc, err := unencryptData(ciphertext, nonce, key, tc.algo)
 			if err != nil {
 				t.Fatalf("unencryptData failed: %v", err)
 			}
@@ -82,6 +83,7 @@ func TestLowLevelEncryption(t *testing.T) {
 			if !bytes.Equal(plaintext, decrypted) {
 				t.Errorf("Decrypted data mismatch. Got %s, expected %s", decrypted, plaintext)
 			}
+			dealloc()
 		})
 	}
 }
@@ -140,22 +142,24 @@ func TestSessionEntryCRUD(t *testing.T) {
 	}
 
 	// Get
-	gotVal, err := sess.Get(key)
+	gotVal,deallocVal,err := sess.Get(key)
 	if err != nil { t.Fatalf("Get failed: %v", err) }
 	if !bytes.Equal(gotVal, []byte("mypassword123")) {
 		t.Errorf("Get returned %s, expected mypassword123", gotVal)
 	}
+	deallocVal()
 
 	// Update
 	newVal := []byte("updated_password_456")
 	if err := sess.Update(key, bytes.Clone(newVal)); err != nil { t.Fatalf("Update failed: %v", err) }
 
-	gotVal, err = sess.Get(key)
+	gotVal,deallocVal,err = sess.Get(key)
 	if err != nil { t.Fatalf("Get after update failed: %v", err) }
 
 	if !bytes.Equal(gotVal, newVal) {
 		t.Errorf("Get after update returned %s, expected %s", gotVal, newVal)
 	}
+	deallocVal()
 
 	// Move (Mv)
 	newKey := "/services/db/master_password"
@@ -164,21 +168,22 @@ func TestSessionEntryCRUD(t *testing.T) {
 	}
 
 	// Old key should be gone
-	if _, err := sess.Get(key); err == nil {
+	if _,_,err := sess.Get(key); err == nil {
 		t.Errorf("Expected error getting moved old key, got nil")
 	}
 
 	// New key should exist
-	gotVal, err = sess.Get(newKey)
+	gotVal,deallocVal, err = sess.Get(newKey)
 	if err != nil || !bytes.Equal(gotVal, newVal) {
 		t.Errorf("Get moved key failed or value mismatched: %v", err)
 	}
+	deallocVal()
 
 	// Remove (Rm)
 	if err := sess.Rm(newKey); err != nil {
 		t.Fatalf("Rm failed: %v", err)
 	}
-	if _, err := sess.Get(newKey); err == nil {
+	if _,_, err := sess.Get(newKey); err == nil {
 		t.Errorf("Expected error getting removed key, got nil")
 	}
 }
@@ -234,7 +239,7 @@ func TestSessionNavigationAndListing(t *testing.T) {
 
 	// Test Rmd
 	if err := sess.Rmd("/env/dev/"); err != nil { t.Fatalf("Rmd failed: %v", err) }
-	if _, err := sess.Get("/env/dev/db"); err == nil {
+	if _,_,err := sess.Get("/env/dev/db"); err == nil {
 		t.Errorf("Expected key /env/dev/db to be removed after Rmd")
 	}
 }
@@ -276,9 +281,10 @@ func TestVaultChange(t *testing.T) {
 	if err != nil { t.Fatalf("LoadSession failed with new password: %v", err) }
 	defer newSess.Destroy()
 
-	retrievedVal, err := newSess.Get(key)
+	retrievedVal,dealloc,err := newSess.Get(key)
 	if err != nil { t.Fatalf("Get key after VaultChange failed: %v", err) }
 	if !bytes.Equal(retrievedVal, val) {
 		t.Errorf("Retrieved value mismatch. Got %s, expected %s", retrievedVal, val)
 	}
+	dealloc()
 }

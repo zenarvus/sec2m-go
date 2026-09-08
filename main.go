@@ -34,7 +34,7 @@ import (
 	"github.com/chzyer/readline"
 	cmpck "github.com/zenarvus/compack/go"
 	"github.com/zenarvus/sec2m-go/core"
-	"github.com/zenarvus/sec2m-go/platforms"
+	"github.com/zenarvus/sec2m-go/securemem"
 	"golang.org/x/term"
 )
 
@@ -123,8 +123,8 @@ func printShortcuts(sess *core.Session) {
 
 func main() {
 	// Disable core dumps and ptrace attachment
-	if err := platforms.DisableCoreDump(); err != nil {
-		fmt.Printf("Failed to disable core dumps: %v\n", err)
+	if err := securemem.Setup(); err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
@@ -155,10 +155,10 @@ func main() {
 		vaultPath := getVaultPath()
 
 		pw := getPassword("Set vault password: ")
-		defer core.ZeroBytes(pw)
+		defer securemem.ZeroBytes(pw)
 
 		pwAgain := getPassword("Repeat password: ")
-		defer core.ZeroBytes(pwAgain)
+		defer securemem.ZeroBytes(pwAgain)
 
 		if !bytes.Equal(pw, pwAgain) {
 			fmt.Println("Passwords do not match")
@@ -183,13 +183,13 @@ func main() {
 		}
 
 		oldpw := getPassword("Old password: ")
-		defer core.ZeroBytes(oldpw)
+		defer securemem.ZeroBytes(oldpw)
 
 		newpw := getPassword("New password: ")
-		defer core.ZeroBytes(newpw)
+		defer securemem.ZeroBytes(newpw)
 
 		newpwagain := getPassword("Retype password: ")
-		defer core.ZeroBytes(newpwagain)
+		defer securemem.ZeroBytes(newpwagain)
 
 		if !bytes.Equal(newpw, newpwagain) {
 			fmt.Println("Passwords do not match")
@@ -217,7 +217,7 @@ func main() {
 		vaultPath := getVaultPath()
 
 		pw := getPassword("Vault password: ")
-		defer core.ZeroBytes(pw)
+		defer securemem.ZeroBytes(pw)
 
 		sess, err := core.LoadSession(vaultPath, pw)
 		if err != nil {
@@ -235,7 +235,7 @@ func main() {
 		vaultPath := getVaultPath()
 
 		pw := getPassword("Vault password: ")
-		defer core.ZeroBytes(pw)
+		defer securemem.ZeroBytes(pw)
 
 		sess, err := core.LoadSession(vaultPath, pw)
 		if err != nil {
@@ -261,7 +261,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		defer core.ZeroBytes(result)
+		defer securemem.ZeroBytes(result)
 
 		fmt.Printf("%s", result)
 
@@ -301,7 +301,7 @@ func main() {
 			fmt.Println("Error: "+err.Error())
 			os.Exit(1)
 		}
-		defer core.ZeroBytes(result)
+		defer securemem.ZeroBytes(result)
 
 		fmt.Printf("%s", result)
 	}
@@ -356,7 +356,7 @@ func startShell(sess *core.Session) error {
 		if err != nil { fmt.Println(err); continue }
 
 		fmt.Printf("%s\n", result)
-		core.ZeroBytes(result) // Clean the result from memory after printing
+		securemem.ZeroBytes(result) // Clean the result from memory after printing
 		
 	}
 }
@@ -415,7 +415,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		isOneshot = true
 
 		passwd := getPassword("Vault password: ")
-		defer core.ZeroBytes(passwd)
+		defer securemem.ZeroBytes(passwd)
 
 		vaultPath := getVaultPath()
 
@@ -522,10 +522,13 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		}
 
 		var epath = getArgs[0]
-		val, err := sess.Get(string(epath))
+		val,deallocVal, err := sess.Get(string(epath))
 		if err != nil { return []byte{}, err }
 
-		return val, nil
+		valclone := bytes.Clone(val) // we copy value to golang heap, but we should not do that. It should be managed manually and securely
+		deallocVal()
+
+		return valclone, nil
 
 	case "mv":
 		mvArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, false)
@@ -740,21 +743,28 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			return []byte{}, errors.New("Usage: <?stdin:name:\n:value> | senv <?name> <?value>\n"+err.Error())
 		}
 
-		sess.EnvMap[string(senvArgs[0])] = bytes.Clone(senvArgs[1])
-		return bytes.Clone(senvArgs[1]), nil
+		err = sess.Senv(string(senvArgs[0]), bytes.Clone(senvArgs[1])) // Senv zeroes the value. We need to clone it to return
+		if err != nil { return []byte{}, err }
+
+		return senvArgs[1], nil
 
 	case "genv":
 		genvArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
 		if err != nil { return []byte{}, errors.New("Usage: <?stdin:name> | genv <?name>\n"+err.Error()) }
 
-		return sess.EnvMap[string(genvArgs[0])], nil
+		val,dealloc,err := sess.Genv(string(genvArgs[0]))
+		if err!=nil{return []byte{}, err}
+
+		valclone := bytes.Clone(val) // we copy it to golang heap. But it's  not secure. We need to fix it
+		dealloc()
+
+		return valclone, nil
 
 	case "renv":
 		renvArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
 		if err != nil { return []byte{}, errors.New("Usage: <?stdin:name> | renv <?name>\n"+err.Error()) }
 
-		core.ZeroBytes(sess.EnvMap[string(renvArgs[0])])
-		delete(sess.EnvMap, string(renvArgs[0]))
+		sess.Renv(string(renvArgs[0]))
 
 		return []byte{}, nil
 
@@ -795,8 +805,9 @@ func getShortcuts(sess *core.Session) (map[string][]byte) {
 		if strings.HasPrefix(epath, "/.shortcut/") {
 			shortcut,_ := strings.CutPrefix(epath, "/.shortcut/")
 			if !strings.Contains(shortcut, "/") {
-				shortcutVal, _ := sess.Get(epath)
-				shortcuts[shortcut] = shortcutVal
+				shortcutVal,deallocVal, _ := sess.Get(epath) // they are non-secret info. We can clone them to go heap
+				shortcuts[shortcut] = bytes.Clone(shortcutVal)
+				deallocVal()
 			}
 		}
 

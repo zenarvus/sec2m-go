@@ -16,6 +16,8 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+// TODO: Write a function in securemem that converts a regular golang slice to a manually managed one by zeroing the original
+
 package core
 
 import (
@@ -27,9 +29,11 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -41,7 +45,7 @@ import (
 
 	"github.com/zenarvus/compack/go"
 	"github.com/zenarvus/polyformats/polysha/go"
-	"github.com/zenarvus/sec2m-go/platforms"
+	"github.com/zenarvus/sec2m-go/securemem"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -109,50 +113,64 @@ type Entry struct {
 }
 type Argon2IDParams struct {
 	Iterations uint32 `cmpck:"1"` // Iterations
-	Memory uint32 `cmpc:"2"` // Required memory in megabytes
+	Memory uint32 `cmpck:"2"` // Required memory in megabytes
 	Threads uint32 `cmpck:"3"` // Parallel threads used while deriving keys
 }
 
 ///////////////////////////////////////////////
+
+type Env struct {
+	EncryptedValue []byte // Encrypted value with the session key
+	Nonce []byte // the nonce used to encrypt the value
+}
+
+type Key struct {
+	EncryptedKey []byte // The encrypted key with session key
+	Nonce []byte // the nonce used to encrypt the key
+}
+// Get the key as plaintext by decrypting the body
+func (k *Key) Get(sessKey []byte, seAlgo uint64) ([]byte, func(), error) {
+	key,deallocFn,err := unencryptData(k.EncryptedKey, k.Nonce, sessKey, seAlgo)
+	if err != nil {return nil,func(){}, err}
+	return key, deallocFn, nil
+}
 
 type Session struct {
 	Version uint64
 	Filepath string // The file of the session.
 	Header UnmarshaledHeader
 
-	SessionKey []byte // The random session key used to encrypt OutEncKey, InnEncKey and MacKey.
+	SessionKey []byte // The random session key used to encrypt OutEncKey, InnEncKey, MacKey and environment variables.
+	SessKeyDealloc func() // The deallocator for the SessionKey
 
 	Signature []byte
-	
-	EncryptedOutEncKey []byte // The secret hash derived from the plaintext password using argon2id. It's used for encryption and decryption.
-	OutEncKeyNonce []byte
 
-	EncryptedInnEncKey []byte
-	InnEncKeyNonce []byte
-
-	EncryptedMacKey []byte // The secret hash derived from the plaintext password using argon2id. It's used for the MAC signature.
-	MacKeyNonce []byte
+	OutEncKey *Key // The key used for encryption and decryption of the whole  body
+	InnEncKey *Key // The key used for the encryption of the individual fields
+	MacKey *Key // The key used for the HMAC signature
 
 	Pwd string // The current working directory in entries. For navigation in the pseudo filesystem.
 
 	EntryMap map[string]*Entry // FrontDecoded(Entry.Path) -> Entry map
-	EnvMap map[string][]byte // Environment variable map
+	EnvMap map[string]Env // Environment variable map
 }
 
 /////////////////////////////////////////////
 
 // Delete the session and remove the lock key
 func (s *Session) Destroy() {
-	ZeroBytes(s.SessionKey)
-	ZeroBytes(s.EncryptedOutEncKey)
-	ZeroBytes(s.EncryptedInnEncKey)
-	ZeroBytes(s.EncryptedMacKey)
-	for _, v := range s.EntryMap {
-		ZeroBytes(v.Value)
-	}
-	for _, v := range s.EnvMap {
-		ZeroBytes(v)
-	}
+	s.SessKeyDealloc() // Securely deallocate the session key
+
+	// Zero encrypted keys in memory
+	securemem.ZeroBytes(s.OutEncKey.EncryptedKey)
+	securemem.ZeroBytes(s.InnEncKey.EncryptedKey)
+	securemem.ZeroBytes(s.MacKey.EncryptedKey)
+
+	// Zero encrypted entry and environment values in memory
+	for _, v := range s.EntryMap { securemem.ZeroBytes(v.Value) }
+	for _, v := range s.EnvMap { securemem.ZeroBytes(v.EncryptedValue) }
+
+	// Remove the lock file
 	os.Remove(s.Filepath+".lock")
 }
 
@@ -188,52 +206,26 @@ func InitSession(
 			// SENonce is created in sess.Save() and changed on every save. It's only needed for decrypting files.
 		},
 		EntryMap: make(map[string]*Entry),
-		EnvMap: make(map[string][]byte),
+		EnvMap: make(map[string]Env),
 
 		Pwd: "/",
 	}
 
-	derivedKey, err := deriveKey(password, salt, sess.Header.KDAlgo, sess.Header.SEAlgo, sess.Header.KDParams)
+	derivedKey,deallocDerivedKey, err := deriveKey(password, salt, sess.Header.KDAlgo, sess.Header.SEAlgo, sess.Header.KDParams)
 	if err != nil { return nil, err }
 
-	sessionKey, outenckey, innenckey, mackey, err := getVaultKeys(
+	sessionKey, sessionKeyDealloc, outenckey, innenckey, mackey, err := getVaultKeys(
 		derivedKey, polysha.SHAType(sess.Header.HashAlgo), sess.Header.SEAlgo,
 	)
-	if err != nil {
-		ZeroBytes(derivedKey)
-		return nil, err
-	}
-	// Lock the session key to the memory
-	err = platforms.LockMemory(sessionKey)
-	if err != nil {
-		ZeroBytes(sessionKey)
-		ZeroBytes(outenckey)
-		ZeroBytes(innenckey)
-		ZeroBytes(mackey)
-		return nil, err
-	}
+	deallocDerivedKey() // We do not need the derived key anymore
+	if err != nil { return nil, err }
 
 	sess.SessionKey = sessionKey
+	sess.SessKeyDealloc = sessionKeyDealloc
 
-	ZeroBytes(derivedKey)
-
-	encOutNonce,encOutEncKey,err := encryptData(outenckey, sess.SessionKey, nil, sess.Header.SEAlgo)
-	if err != nil {return nil, err}
-
-	sess.EncryptedOutEncKey = encOutEncKey
-	sess.OutEncKeyNonce = encOutNonce
-
-	encInnNonce,encInnEncKey,err := encryptData(innenckey, sess.SessionKey, nil, sess.Header.SEAlgo)
-	if err != nil {return nil, err}
-
-	sess.EncryptedInnEncKey = encInnEncKey
-	sess.InnEncKeyNonce = encInnNonce
-
-	encMacNonce,encMacKey,err := encryptData(mackey, sess.SessionKey, nil, sess.Header.SEAlgo)
-	if err != nil {return nil, err}
-
-	sess.EncryptedMacKey = encMacKey
-	sess.MacKeyNonce = encMacNonce
+	sess.OutEncKey = outenckey
+	sess.InnEncKey = innenckey
+	sess.MacKey = mackey
 
 	err = sess.Save()
 	if err!= nil {
@@ -257,7 +249,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 
 	var sess = &Session{
 		EntryMap: make(map[string]*Entry),
-		EnvMap: make(map[string][]byte),
+		EnvMap: make(map[string]Env),
 		Pwd: "/",
 	}
 	sess.Filepath = filepath
@@ -280,7 +272,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	if err != nil {return nil, err}
 
 	// Derive the encryption key using header parameters.
-	derivedKey, err := deriveKey(
+	derivedKey, deallocDerivedKey, err := deriveKey(
 		password, sess.Header.KDSalt,
 		sess.Header.KDAlgo, sess.Header.SEAlgo,
 		sess.Header.KDParams,
@@ -288,90 +280,56 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	if err != nil {return nil, err} 
 
 	// Get vault keys from the derived key
-	sessionKey, outenckey, innenckey, mackey, err := getVaultKeys(
+	sessionKey, deallocSessionKey, outenckey, innenckey, mackey, err := getVaultKeys(
 		derivedKey, polysha.SHAType(sess.Header.HashAlgo), sess.Header.SEAlgo,
 	)
-	ZeroBytes(derivedKey) // Wipe derivedKey from memory. We do not need it anymore.
+	deallocDerivedKey() // Wipe derivedKey from memory. We do not need it anymore.
 	if err != nil { return nil, err } // After getting keys is successful, we should destroy the session in any error to remove them from memory.
 
-	// Lock the session key to the memory
-	err = platforms.LockMemory(sessionKey)
-	if err != nil {
-		ZeroBytes(sessionKey)
-		ZeroBytes(outenckey)
-		ZeroBytes(innenckey)
-		ZeroBytes(mackey)
-		return nil, err
-	}
+	sess.SessionKey = sessionKey // Save the session key
+	sess.SessKeyDealloc = deallocSessionKey
 
-	sess.SessionKey = sessionKey // Save the session key	 
+	sess.OutEncKey = outenckey
+	sess.InnEncKey = innenckey
+	sess.MacKey = mackey
 
-	// Encrypt vault keys with session key and save to session
-
-	encOutNonce,encOutEncKey,err := encryptData(outenckey, sess.SessionKey, nil, sess.Header.SEAlgo)
-	if err != nil {
-		sess.Destroy()
-		return nil, err
-	}
-	sess.EncryptedOutEncKey = encOutEncKey
-	sess.OutEncKeyNonce = encOutNonce
-
-	encInnNonce,encInnEncKey,err := encryptData(innenckey, sess.SessionKey, nil, sess.Header.SEAlgo)
-	ZeroBytes(innenckey) // We do not need innenckey when loading the session.
-	if err != nil {
-		sess.Destroy()
-		return nil, err
-	}
-	sess.EncryptedInnEncKey = encInnEncKey
-	sess.InnEncKeyNonce = encInnNonce
-
-	encMacNonce,encMacKey,err := encryptData(mackey, sess.SessionKey, nil, sess.Header.SEAlgo)
-	if err != nil {
-		sess.Destroy()
-		return nil, err
-	}
-	sess.EncryptedMacKey = encMacKey
-	sess.MacKeyNonce = encMacNonce
+	plaintextMacKey, macDealloc, err := mackey.Get(sess.SessionKey, sess.Header.SEAlgo)
+	if err != nil { sess.Destroy(); return nil, err }
 
 	// Do integrity check (Encrypt-then-MAC)
 	expectedSignature, err := computeSignature(
 		polysha.SHAType(sess.Header.HashAlgo),
-		mackey,
+		plaintextMacKey,
 		fileStruct.Version,
 		fileStruct.Header,
 		fileStruct.Body,
 	)
-	ZeroBytes(mackey) // Remove plaintext mackey from memory after using it.
-	if err != nil {
-		sess.Destroy() // Destroy the session to remove the encrypted key from memory.
-		return nil, err
-	}
+	macDealloc() // Remove plaintext mackey from memory after using it.
+	if err != nil { sess.Destroy(); return nil, err } // Destroy the session to remove the encrypted key from memory.
 	
+	// Compare the expected signature and received  one in constant time
 	if subtle.ConstantTimeCompare(expectedSignature, fileStruct.Signature) != 1 {
 		sess.Destroy()
 		return nil, errors.New("integrity check failed: invalid password or tampered vault")
 	}
 
-	// Decrypt the body
-	unencryptedBodyBytes, err := unencryptData(fileStruct.Body, sess.Header.SENonce, outenckey, sess.Header.SEAlgo)
-	ZeroBytes(outenckey) // Remove plaintext outer encryption key from memory after using it.
-	if err!=nil {
-		sess.Destroy()
-		return nil, err
-	}
-	// defer ZeroBytes(unencryptedBodyBytes) -> Compack uses bytes in here when parsing to structs. Deleting them will remove them from the struct fields too.
+	plaintextOutEncKey, outencDealloc, err := outenckey.Get(sess.SessionKey, sess.Header.SEAlgo)
+	if err != nil { sess.Destroy(); return nil, err }
+
+	// Decrypt the body. Compack reuses bytes in here when parsing to structs. Deleting them will remove them from the struct fields too. So we need to clone it when using
+	unencryptedBodyBytes, deallocBody, err := unencryptData(fileStruct.Body, sess.Header.SENonce, plaintextOutEncKey, sess.Header.SEAlgo)
+	outencDealloc()
+	if err!=nil { sess.Destroy(); return nil, err }
 
 	var unencryptedBody UnencryptedBody 
-	err = cmpck.Unmarshal(unencryptedBodyBytes, &unencryptedBody)
-	if err!=nil {
-		sess.Destroy()
-		return nil, err
-	}
+	err = cmpck.Unmarshal(bytes.Clone(unencryptedBodyBytes), &unencryptedBody)
+	deallocBody()
+	if err!=nil { sess.Destroy(); return nil, err }
 
 	// Load file entries to the session.
 	var prev string
 	for _,entry := range unencryptedBody.Entries {
-		decoded, err := FrontDecode(prev, entry.Path)
+		decoded, err := frontDecode(prev, entry.Path)
 		if err != nil {return nil, err}
 		prev = decoded
 		entry.Path = []byte(decoded)
@@ -388,34 +346,37 @@ func (s *Session) VaultChange(
 	kdAlgoStr, seAlgoStr, hashAlgoStr string,
 ) error {
 	// Check if the old password is correct
-	oldDerivedKey, err := deriveKey(
+	oldDerivedKey, oldDerivedDealloc, err := deriveKey(
 		oldpass, s.Header.KDSalt, s.Header.KDAlgo, s.Header.SEAlgo, s.Header.KDParams,
 	)
-	defer ZeroBytes(oldDerivedKey)
 	if err != nil {return err}
 
 	// It's enough to check if inner encryption key is equal.
 	// We gonna use it anyway.
-	_,_,oldInnerEncKey,_,err := getVaultKeys(
+	tmpSKey,deallocTmpSkey,_,oldInnerEncKey,_,err := getVaultKeys(
 		oldDerivedKey, polysha.SHAType(s.Header.HashAlgo), s.Header.SEAlgo,
 	)
-	defer ZeroBytes(oldInnerEncKey)
-	ZeroBytes(oldDerivedKey);
+	oldDerivedDealloc() // deallocate the old derived key here
 	if err != nil { return err }
+
+	// get the old plaintext inner encryption key
+	oldPlaintextInnerEncKey, deallocOldInnEncKey, err := oldInnerEncKey.Get(tmpSKey, s.Header.SEAlgo)
+	deallocTmpSkey() // we do not need generated tmp session key anymore. It was used only to encrypt oldInnerEncKey
+	if err != nil {return err}
 
 	oldEncAlgo := s.Header.SEAlgo
 	oldHashAlgo := s.Header.HashAlgo // Required for generating nonces in decryption
 
 	// Decrypt the current inner encryption key
-	expectedInnEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
+	expectedInnEncKey, deallocExpectedInn, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
 	// Compare them and give error if they do not match
-	if !bytes.Equal(oldInnerEncKey, expectedInnEncKey) {
-		ZeroBytes(expectedInnEncKey)
+	if !bytes.Equal(oldPlaintextInnerEncKey, expectedInnEncKey) {
+		deallocExpectedInn()
 		return errors.New("provided password is incorrect")
 	}
-	ZeroBytes(expectedInnEncKey)
+	deallocExpectedInn()
 
 	// If we are here, the provided password is correct. Update the vault settings.
 
@@ -434,41 +395,29 @@ func (s *Session) VaultChange(
 
 	// Generate the new keys from the new password
 
-	derivedKey, err := deriveKey(newpass, s.Header.KDSalt, s.Header.KDAlgo, s.Header.SEAlgo, s.Header.KDParams)
+	derivedKey,deallocNewDerived,err := deriveKey(newpass, s.Header.KDSalt, s.Header.KDAlgo, s.Header.SEAlgo, s.Header.KDParams)
 	if err != nil {return err}
 
-	newSessK, newOutEncK, newInnEncK, newMacK, err := getVaultKeys(
+	newSessK,deallocNewSessK, newOutEncK, newInnEncK, newMacK, err := getVaultKeys(
 		derivedKey, polysha.SHAType(s.Header.HashAlgo), s.Header.SEAlgo,
 	)
-	ZeroBytes(derivedKey)
+	deallocNewDerived()
 	if err != nil {return err}
-
-	// Lock the session key to the memory
-	err = platforms.LockMemory(newSessK)
-	if err != nil {
-		ZeroBytes(newSessK)
-		ZeroBytes(newOutEncK)
-		ZeroBytes(newInnEncK)
-		ZeroBytes(newMacK)
-		return err
-	}
 
 	// Update the session key
 	s.SessionKey = newSessK
+	s.SessKeyDealloc = deallocNewSessK
 
-	// Encrypt the new outer encryption key and save to the session
-	outerNonce, encOuterKey, err := encryptData(newOutEncK, s.SessionKey, nil, s.Header.SEAlgo)
-	ZeroBytes(newOutEncK) // We do not need the raw key anymore. Empty it.
-	if err != nil { return err }
-	s.OutEncKeyNonce = outerNonce
-	s.EncryptedOutEncKey = encOuterKey
+	s.OutEncKey = newOutEncK
+	s.InnEncKey = newInnEncK
+	s.MacKey = newMacK
 
-	// Encrypt the new mac key and save to the session
-	macNonce, encMacKey, err := encryptData(newMacK, s.SessionKey, nil, s.Header.SEAlgo)
-	ZeroBytes(newMacK) // We do not need the raw key anymore. Empty it.
-	if err != nil { return err }
-	s.MacKeyNonce = macNonce
-	s.EncryptedMacKey = encMacKey
+	// Decrpyt the new inner encryption key
+	plaintextNewInnEncK, deallocNewInnEncK, err := newInnEncK.Get(newSessK, s.Header.SEAlgo)
+	if err != nil {
+		deallocOldInnEncKey()
+		return err
+	}
 
 	// Update the inner encryptions from old to new
 	for _,entry := range s.EntryMap {
@@ -480,11 +429,8 @@ func (s *Session) VaultChange(
 		if err != nil { return err }
 
 		// Decrypt the value using old parameters
-		plaintextVal, err := unencryptData(entry.Value, oldNonce, oldInnerEncKey, oldEncAlgo)
-		if err != nil {
-			ZeroBytes(plaintextVal)
-			return err
-		}
+		plaintextVal,deallocPlaintextVal, err := unencryptData(entry.Value, oldNonce, oldPlaintextInnerEncKey, oldEncAlgo)
+		if err != nil { deallocPlaintextVal(); return err }
 
 		// new nonce with new hash algorithm
 		newNonce,err := polysha.HashRaw(
@@ -494,23 +440,16 @@ func (s *Session) VaultChange(
 		if err != nil { return err }
 		
 		// Encrypt it with the new ones
-		_, newVal, err := encryptData(plaintextVal, newInnEncK, newNonce, s.Header.SEAlgo)
-		if err != nil {
-			ZeroBytes(plaintextVal)
-			return err
-		}
+		_, newVal, err := encryptData(plaintextVal, plaintextNewInnEncK, newNonce, s.Header.SEAlgo)
+		if err != nil { deallocPlaintextVal(); return err }
+
 		entry.Value = newVal
-
-		ZeroBytes(plaintextVal)
-
+		deallocPlaintextVal()
 	}
 
-	// Encrypt the new inner encryption key and save to the session
-	innerNonce, encInnerKey, err := encryptData(newInnEncK, s.SessionKey, nil, s.Header.SEAlgo)
-	ZeroBytes(newInnEncK) // We do not need the raw key anymore. Empty it.
-	if err != nil { return err }
-	s.InnEncKeyNonce = innerNonce
-	s.EncryptedInnEncKey = encInnerKey
+	// Deallocate the old and new plaintext inner encryption key
+	deallocOldInnEncKey()
+	deallocNewInnEncK()
 
 	// Save the session to the file with updated parameters
 	err = s.Save()
@@ -544,22 +483,22 @@ func (s *Session) SaveAs(filePath string) error {
 	for _,epath := range sortedPathList {
 		// Front code the path
 		entry := *s.EntryMap[epath]
-		entry.Path = FrontCode(prev, epath)
+		entry.Path = frontCode(prev, epath)
 		prev = epath
 		unencryptedBody.Entries = append(unencryptedBody.Entries, entry)
 	}
 
 	unencryptedBodyBytes, err := cmpck.Marshal(unencryptedBody, cmpck.EncOpts{Canonical:true})
 	if err!=nil {return err}
-	defer ZeroBytes(unencryptedBodyBytes)
+	defer securemem.ZeroBytes(unencryptedBodyBytes)
 
 	// Decrypt the outer encryption key using SessionKey
-	outEncKey, err := unencryptData(s.EncryptedOutEncKey, s.OutEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
+	plainOutEncKey, deallocOutEncKey, err := s.OutEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
-	// Encrypt the body using outEncKey
-	nonce,encryptedData, err := encryptData(unencryptedBodyBytes, outEncKey, nil, s.Header.SEAlgo)
-	ZeroBytes(outEncKey) // Remove outenckey from memory.
+	// Encrypt the body using plainOutEncKey
+	nonce,encryptedData, err := encryptData(unencryptedBodyBytes, plainOutEncKey, nil, s.Header.SEAlgo)
+	deallocOutEncKey() // Remove outenckey from memory.
 	if err!=nil{return err}
 
 	s.Header.SENonce = nonce // Set the nonce to the session.
@@ -569,18 +508,18 @@ func (s *Session) SaveAs(filePath string) error {
 	if err != nil {return err}
 
 	// Decrypt the mac key using SessionKey
-	macKey, err := unencryptData(s.EncryptedMacKey, s.MacKeyNonce, s.SessionKey, s.Header.SEAlgo)
+	plainMacKey, deallocMacKey, err := s.MacKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
 	// Compute the signature
 	signature, err := computeSignature(
 		polysha.SHAType(s.Header.HashAlgo),
-		macKey,
+		plainMacKey,
 		s.Version,
 		headerBytes,
 		encryptedData,
 	)
-	ZeroBytes(macKey) // Remove mackey from memory
+	deallocMacKey() // Remove mackey from memory
 	if err != nil { return err }
 
 	s.Signature = signature // Update the signature of the session
@@ -621,35 +560,38 @@ func (s *Session) SaveAs(filePath string) error {
 	return nil
 }
 
-// Get the value using key.
-func (s *Session) Get(key string) ([]byte, error) {
+// Get the value using key with a manual deallocator
+func (s *Session) Get(key string) ([]byte, func(), error) {
 	// key must be a file path string.
 	if !PathRegexp.MatchString(key) || strings.HasSuffix(key, "/") {
-		return nil, errors.New("key must be a filepath string")
+		return nil, func(){}, errors.New("key must be a filepath string")
 	}
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(key, "/") { key = filepath.Join(s.Pwd, key) }
+	if !strings.HasPrefix(key, "/") { key = path.Join(s.Pwd, key) }
 
 	entry, found := s.EntryMap[key]
 
-	if !found { return nil, errors.New("not found") }
+	if !found { return nil, func(){}, errors.New("not found") }
 
 	// Decrypt the inner encryption key
-	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
-	if err != nil {return nil, err}
+	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
+	if err != nil {return nil,func(){}, err}
 
 	nonce,err := polysha.HashRaw(
 		polysha.SHAType(s.Header.HashAlgo),
 		append(entry.MTime, entry.Path...),
 	)
-	if err != nil {return nil, err}
+	if err != nil {
+		deallocInnEncKey()
+		return nil,func(){}, err
+	}
 
 	// Decrypt and return the value with the inner encryption key
-	value, err := unencryptData(entry.Value, nonce, innEncKey, s.Header.SEAlgo)
-	ZeroBytes(innEncKey)
-	if err != nil {return nil,err}
+	value,deallocVal, err := unencryptData(entry.Value, nonce, plainInnEncKey, s.Header.SEAlgo)
+	deallocInnEncKey()
+	if err != nil {return nil,func(){},err}
 
-	return value, nil
+	return value,deallocVal,nil
 }
 
 // If an entry does not exist, add it directly with given mtime. If mtime is empty, use the current time
@@ -659,7 +601,7 @@ func (s *Session) Put(epath string, mtime []byte, value []byte) error {
 	if !PathRegexp.MatchString(epath) || strings.HasSuffix(epath, "/") { return errors.New("path must be a file path string") }
 
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(epath, "/") { epath = filepath.Join(s.Pwd, epath) }
+	if !strings.HasPrefix(epath, "/") { epath = path.Join(s.Pwd, epath) }
 
 	existingEntry,exists := s.EntryMap[epath]
 
@@ -688,19 +630,19 @@ func (s *Session) Put(epath string, mtime []byte, value []byte) error {
 	// mTimeBytes is set when we reach here
 
 	// Decrypt the inner encryption key
-	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
+	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
 	nonce,err := polysha.HashRaw(
 		polysha.SHAType(s.Header.HashAlgo),
 		append(mTimeBytes, []byte(epath)...),
 	)
-	if err != nil {return err}
+	if err != nil { deallocInnEncKey(); return err}
 
 	// Encrypt the value with the key
-	_, chiphertext, err := encryptData(value, innEncKey, nonce, s.Header.SEAlgo)
-	ZeroBytes(innEncKey)
-	ZeroBytes(value)
+	_, chiphertext, err := encryptData(value, plainInnEncKey, nonce, s.Header.SEAlgo)
+	deallocInnEncKey()
+	securemem.ZeroBytes(value) // Zero the passed value
 	if err != nil {return err}
 
 	var newEntry = &Entry{
@@ -719,7 +661,7 @@ func (s *Session) Update(epath string, value []byte) error {
 	// path must be an absolute filepath like string. (no slash at the end)
 	if !PathRegexp.MatchString(epath) || strings.HasSuffix(epath, "/") { return errors.New("path must be an file path string") }
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(epath, "/") { epath = filepath.Join(s.Pwd, epath) }
+	if !strings.HasPrefix(epath, "/") { epath = path.Join(s.Pwd, epath) }
 
 	existingEntry,exists := s.EntryMap[epath]
 
@@ -735,23 +677,23 @@ func (s *Session) Update(epath string, value []byte) error {
 	binary.LittleEndian.PutUint64(mTimeBytes, uint64(mTime))
 
 	// Decrypt the inner encryption key
-	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
+	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
 	nonce,err := polysha.HashRaw(
 		polysha.SHAType(s.Header.HashAlgo),
 		append(mTimeBytes, []byte(epath)...),
 	)
-	if err != nil {return err}
+	if err != nil {deallocInnEncKey(); return err}
 
 	// Encrypt the new value with the key
-	_, chiphertext, err := encryptData(value, innEncKey, nonce, s.Header.SEAlgo)
-	ZeroBytes(innEncKey)
-	ZeroBytes(value)
+	_, chiphertext, err := encryptData(value, plainInnEncKey, nonce, s.Header.SEAlgo)
+	deallocInnEncKey()
+	securemem.ZeroBytes(value)
 	if err != nil {return err}
 
 	// Zero the old value
-	ZeroBytes(s.EntryMap[epath].Value)
+	securemem.ZeroBytes(s.EntryMap[epath].Value)
 
 	s.EntryMap[epath].Value = chiphertext
 	s.EntryMap[epath].MTime = mTimeBytes
@@ -764,14 +706,17 @@ func (s *Session) Rm(key string) error {
 	// path must be an absolute filepath like string.
 	if !PathRegexp.MatchString(key) || strings.HasSuffix(key, "/") { return errors.New("path must be a file path string") }
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(key, "/") { key = filepath.Join(s.Pwd, key) }
+	if !strings.HasPrefix(key, "/") { key = path.Join(s.Pwd, key) }
 
 	_,exists := s.EntryMap[key]
 
 	if !exists { return errors.New("key does not exist") }
 
-	// Zero the values
-	ZeroBytes(s.EntryMap[key].Value)
+	// Wait for 1 millisecond to prevent Put > Delete > Put from happening in the same millisecond, making nonce the same
+	time.Sleep(1*time.Millisecond)
+
+	// Zero the value
+	securemem.ZeroBytes(s.EntryMap[key].Value)
 
 	delete(s.EntryMap, key)
 
@@ -785,7 +730,7 @@ func (s *Session) Rmd(dirPath string) error {
 	// dirPath must start and end with "/"
 	if !PathRegexp.MatchString(dirPath) { return errors.New("malformed folder path. It should be POSIX portable path.") }
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(dirPath, "/") { dirPath = filepath.Join(s.Pwd, dirPath) }
+	if !strings.HasPrefix(dirPath, "/") { dirPath = path.Join(s.Pwd, dirPath) }
 	// if it does not have slash at the end, add it.
 	if !strings.HasSuffix(dirPath, "/") { dirPath = dirPath+"/" }
 
@@ -794,8 +739,10 @@ func (s *Session) Rmd(dirPath string) error {
 	for key := range s.EntryMap {
 		if strings.HasPrefix(key, dirPath) {
 			folderExists = true
+
+			time.Sleep(1*time.Millisecond)
 			
-			ZeroBytes(s.EntryMap[key].Value)
+			securemem.ZeroBytes(s.EntryMap[key].Value)
 			delete(s.EntryMap, key)
 		}
 	}
@@ -811,29 +758,29 @@ func (s *Session) Mv(oldKey, newKey string) error {
 		return errors.New("path must be a file path string")
 	}
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(oldKey, "/") { oldKey = filepath.Join(s.Pwd, oldKey) }
-	if !strings.HasPrefix(newKey, "/") { newKey = filepath.Join(s.Pwd, newKey) }
+	if !strings.HasPrefix(oldKey, "/") { oldKey = path.Join(s.Pwd, oldKey) }
+	if !strings.HasPrefix(newKey, "/") { newKey = path.Join(s.Pwd, newKey) }
 
 	entry,exists := s.EntryMap[oldKey]
 
 	if !exists { return errors.New("key does not exist") }
 
 	// Decrypt the inner encryption key
-	innEncKey, err := unencryptData(s.EncryptedInnEncKey, s.InnEncKeyNonce, s.SessionKey, s.Header.SEAlgo)
+	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
 	nonce,err := polysha.HashRaw(
 		polysha.SHAType(s.Header.HashAlgo),
 		append(entry.MTime, entry.Path...),
 	)
-	if err != nil {return err}
+	if err != nil { deallocInnEncKey(); return err}
 
 	// Decrypt the value with the inner encryption key.
 	// Put needs it in plaintext.
-	value, err := unencryptData(entry.Value, nonce, innEncKey, s.Header.SEAlgo)
-	ZeroBytes(innEncKey)
+	value, deallocVal, err := unencryptData(entry.Value, nonce, plainInnEncKey, s.Header.SEAlgo)
+	deallocInnEncKey()
 	if err != nil {return err}
-	defer ZeroBytes(value) // Clean even if s.Put() returns without clearing value.
+	defer deallocVal() // Clean even if s.Put() returns without clearing value.
 
 	err = s.Put(newKey, entry.MTime, value)
 	if err != nil {return err}
@@ -851,7 +798,7 @@ func (s *Session) Cd(dirPath string) error {
 	// dirPath must start and end with "/"
 	if !PathRegexp.MatchString(dirPath) { return errors.New("malformed folder path. It should be POSIX portable path.") }
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(dirPath, "/") { dirPath = filepath.Join(s.Pwd, dirPath) }
+	if !strings.HasPrefix(dirPath, "/") { dirPath = path.Join(s.Pwd, dirPath) }
 	// if it does not have slash at the end, add it.
 	if !strings.HasSuffix(dirPath, "/") { dirPath = dirPath+"/" }
 
@@ -873,7 +820,7 @@ func (s *Session) Ls(dirPath string) ([]string, []string, error) {
 	// dirPath must start and end with "/"
 	if !PathRegexp.MatchString(dirPath) { return nil, nil, errors.New("malformed folder path. It should be POSIX portable path.") }
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(dirPath, "/") { dirPath = filepath.Join(s.Pwd, dirPath) }
+	if !strings.HasPrefix(dirPath, "/") { dirPath = path.Join(s.Pwd, dirPath) }
 	// if it does not have slash at the end, add it.
 	if !strings.HasSuffix(dirPath, "/") { dirPath = dirPath+"/" }
 
@@ -914,7 +861,7 @@ func (s *Session) Lsall(dirPath string) ([]string, error) {
 	// dirPath must start and end with "/"
 	if !PathRegexp.MatchString(dirPath) { return nil, errors.New("malformed folder path. It should be POSIX portable path.") }
 	// If it does not have slash at the start, join it to the current working directory.
-	if !strings.HasPrefix(dirPath, "/") { dirPath = filepath.Join(s.Pwd, dirPath) }
+	if !strings.HasPrefix(dirPath, "/") { dirPath = path.Join(s.Pwd, dirPath) }
 	// if it does not have slash at the end, add it.
 	if !strings.HasSuffix(dirPath, "/") { dirPath = dirPath+"/" }
 
@@ -929,6 +876,38 @@ func (s *Session) Lsall(dirPath string) ([]string, error) {
 	return entries, nil
 }
 
+// Set an environment variable
+func (s *Session) Senv(name string, value []byte) error {
+
+	nonce, encryptedVal, err := encryptData(value, s.SessionKey, nil, s.Header.SEAlgo)
+	securemem.ZeroBytes(value)
+	if err != nil { return err }
+
+	s.EnvMap[name] = Env{EncryptedValue: encryptedVal, Nonce: nonce}
+	return nil
+}
+// Get an environment variable
+func (s *Session) Genv(name string) ([]byte, func(), error) {
+	if _,exists := s.EnvMap[name]; exists {
+
+		plainVal, dealloc, err := unencryptData(
+			s.EnvMap[name].EncryptedValue, s.EnvMap[name].Nonce, s.SessionKey, s.Header.SEAlgo,
+		)
+		if err != nil { return nil, func(){}, err }
+
+		return plainVal, dealloc, err
+	}
+	return nil, func(){}, nil
+}
+// Delete an environment variable
+func (s *Session) Renv(name string) {
+	_,exists := s.EnvMap[name]
+	if exists {
+		securemem.ZeroBytes(s.EnvMap[name].EncryptedValue)
+		delete(s.EnvMap, name)
+	}
+}
+
 /////////////////////////////////////////////////////////////////
 
 // deriveKey generates a key from password and salt, used for symmetric encryption and signature
@@ -937,56 +916,88 @@ func deriveKey(
 	password []byte, salt []byte,
 	kdAlgorithm uint64, seAlgorithm uint64,
 	params []byte,
-) ([]byte, error) {
+) ([]byte, func(), error) {
 
 	// Determine the key length based on the seAlgorithm
 	keylen, exists := encAlgoToKeylen[seAlgorithm]
-	if !exists { return nil, errors.New("unsupported encryption algorithm for key length") }
+	if !exists { return nil, func(){}, errors.New("unsupported encryption algorithm for key length") }
 
 	switch kdAlgorithm {
 	case Derive_ARGON2ID:
 		var argon2idParams Argon2IDParams
 		err := cmpck.Unmarshal(params, &argon2idParams)
-		if err != nil {return nil, err}
+		if err != nil {return nil,func(){}, err}
 
-		return argon2.IDKey(
+		// generate the key on go heap which is handled by go runtime (we do not want that)
+		heapKey := argon2.IDKey(
 			password, salt,
 			argon2idParams.Iterations, argon2idParams.Memory*1024, uint8(argon2idParams.Threads), uint32(keylen),
-		), nil
+		)
+
+		// allocate a secure memory
+		secKey, deallocFn, err := securemem.Alloc(keylen)
+		if err != nil {
+			securemem.ZeroBytes(heapKey) // Wipe heap key before returning on error
+			return nil, nil, err
+		}
+
+		// Copy to secure memory and immediately wipe the heap allocation
+		copy(secKey, heapKey)
+		securemem.ZeroBytes(heapKey)
+
+		return secKey, deallocFn, nil
 	default:
-		return nil, errors.New("unsupported algorithm for key derivation")
+		return nil,func(){}, errors.New("unsupported algorithm for key derivation")
 	}
 }
 
 // getVaultKeys generates A random session key, and derives OuterEncryptionKey, InnerEncryptionKey and MacKey from the derived key using the given hash function.
 func getVaultKeys(
 	derivedKey []byte, hashAlgo polysha.SHAType, seAlgorithm uint64,
-) ([]byte, []byte, []byte, []byte, error) {
+) ([]byte, func(), *Key, *Key, *Key, error) {
 
 	// Determine the key length based on the seAlgorithm
 	keylen, exists := encAlgoToKeylen[seAlgorithm]
-	if !exists { return nil, nil,nil,nil, errors.New("unsupported encryption algorithm for key length") }
+	if !exists { return nil,func(){},nil,nil,nil, errors.New("unsupported encryption algorithm for key length") }
 
 	if keylen != 32 {
-		return nil, nil, nil, nil, errors.New("currently only logic for 32 byte symmetric encryption keys is implemented")
+		return nil,func(){}, nil, nil, nil, errors.New("currently only logic for 32 byte symmetric encryption keys is implemented")
 	}
 
 	// Create a new random session key
-	sessionKey := make([]byte, keylen)
+	sessionKey,sessKeyDealloc,err := securemem.Alloc(keylen, securemem.WithLocking(true))
+	if err != nil { return nil,func(){},nil,nil,nil,err }
+
 	if _, err := io.ReadFull(rand.Reader, sessionKey); err != nil {
-		return nil,nil,nil,nil,err
+		sessKeyDealloc()
+		return nil,func(){},nil,nil,nil,err
 	}
 
-	out, err := polysha.HashRaw(hashAlgo, append([]byte("out_key"), derivedKey...))
-	if err!=nil {return nil, nil, nil, nil, err}
+	deriveSecureKey := func(prefix string) (*Key, error) {
+		heapHash, err := polysha.HashRaw(hashAlgo, append([]byte(prefix), derivedKey...))
+		if err != nil { return nil, err }
 
-	inn, err := polysha.HashRaw(hashAlgo, append([]byte("inn_key"), derivedKey...))
-	if err!=nil {return nil, nil, nil, nil, err}
+		var key = &Key{}
+		nonce, encryptedKey, err := encryptData(heapHash, sessionKey, nil, seAlgorithm)
+		securemem.ZeroBytes(heapHash) // Wipe the heap-allocated slice
 
-	mac, err := polysha.HashRaw(hashAlgo, append([]byte("mac_key"), derivedKey...))
-	if err!=nil {return nil, nil, nil, nil, err}
+		if err != nil { securemem.ZeroBytes(heapHash); return nil, err }
+		key.EncryptedKey = encryptedKey
+		key.Nonce = nonce
+		
+		return key, nil
+	}
 
-	return sessionKey, out[:keylen], inn[:keylen], mac[:keylen], nil
+	out,err := deriveSecureKey("out_key")
+	if err!=nil {return nil,func(){}, nil, nil, nil, err}
+
+	inn, err := deriveSecureKey("inn_key")
+	if err!=nil {return nil,func(){}, nil, nil, nil, err}
+
+	mac, err := deriveSecureKey("mac_key")
+	if err!=nil {return nil,func(){}, nil, nil, nil, err}
+
+	return sessionKey,sessKeyDealloc, out, inn, mac, nil
 }
 
 func encryptData(plaintext []byte, enckey []byte, nonce []byte, algorithm uint64) ([]byte, []byte, error) {
@@ -1051,20 +1062,25 @@ func encryptData(plaintext []byte, enckey []byte, nonce []byte, algorithm uint64
 }
 
 // unencryptData decrypts the chiphertext using the given nonce, secret and algorithm.
-func unencryptData(ciphertext []byte, iv_nonce []byte, enckey []byte, algorithm uint64) ([]byte, error){
+// It returns the plaintext data and a deallocator to wipe it from memory
+func unencryptData(ciphertext []byte, iv_nonce []byte, enckey []byte, algorithm uint64) ([]byte, func(), error){
 	switch algorithm {
 	case Encrypt_AES_CBC_256:
 
 		if len(ciphertext)%aes.BlockSize != 0 {
-			return nil, errors.New("decryption failed: ciphertext length is not a multiple of block size")
+			return nil,func(){}, errors.New("decryption failed: ciphertext length is not a multiple of block size")
 		}
 
 		// Initialize AES-CBC
 		block, err := aes.NewCipher(enckey)
-		if err != nil { return nil, err }
+		if err != nil { return nil, func(){}, err }
+
+		// Securely allocate memory for the plaintext
+		paddedPlaintext, deallocFn, err := securemem.Alloc(len(ciphertext))
+		if err != nil {return nil, func() {}, fmt.Errorf("secure allocation failed: %w", err)}
 
 		// Decrypt to paddedPlaintext using the key and iv_nonce
-		paddedPlaintext := make([]byte, len(ciphertext))
+
 		// iv_nonce can be anything aslong as its bigger than the aes blocksize. We get the first blocksize bytes
 		mode := cipher.NewCBCDecrypter(block, iv_nonce[:aes.BlockSize])
 		mode.CryptBlocks(paddedPlaintext, ciphertext)
@@ -1088,30 +1104,35 @@ func unencryptData(ciphertext []byte, iv_nonce []byte, enckey []byte, algorithm 
 		}
 
 		plaintext, err := pkcs7Unpad(paddedPlaintext, aes.BlockSize)
-		if err != nil { return nil, errors.New("decryption failed: invalid padding") }
+		if err != nil {
+			deallocFn() // wipe the allocated memory if an error happens
+			return nil, func(){}, errors.New("decryption failed: invalid padding")
+		}
 
-		return plaintext, nil
+		// Note: Because deallocFn captures the original 'paddedPlaintext' slice from Alloc(), it will safely zero and unmap the entire buffer, even though we return a sub-slice here.
+		return plaintext,deallocFn,nil
 
 	case Encrypt_CHACHA20:
 		// Ensure the nonce matches xchacha20's expectations
 		if len(iv_nonce) > chacha20.NonceSizeX { iv_nonce = iv_nonce[:chacha20.NonceSizeX] }
 		if len(iv_nonce) != chacha20.NonceSizeX {
-			return nil, errors.New("decryption failed: invalid nonce length for XChaCha20")
+			return nil,func(){}, errors.New("decryption failed: invalid nonce length for XChaCha20")
 		}
 
 		cipher, err := chacha20.NewUnauthenticatedCipher(enckey, iv_nonce)
-		if err != nil {
-			return nil, err
-		}
+		if err != nil { return nil,func(){}, err }
+
+		// Securely allocate memory for the plaintext
+		plaintext, deallocFn, err := securemem.Alloc(len(ciphertext))
+		if err != nil {return nil, func() {}, fmt.Errorf("secure allocation failed: %w", err)}
 
 		// Direct XOR stream back into plaintext
-		plaintext := make([]byte, len(ciphertext))
 		cipher.XORKeyStream(plaintext, ciphertext)
 
-		return plaintext, nil
+		return plaintext, deallocFn, nil
 
 	default:
-		return nil, errors.New("UnencryptData: unsupported encryption algorithm")
+		return nil,func(){}, errors.New("UnencryptData: unsupported encryption algorithm")
 	}
 }
 
@@ -1133,12 +1154,6 @@ func computeSignature(
 	if err != nil {return nil, err}
 
 	return b.Sum(nil), nil
-}
-
-// ZeroBytes explicitly zeroes out sensitive memory slices
-func ZeroBytes(b []byte) {
-	if b == nil {return}
-	for i := range b { b[i] = 0 }
 }
 
 ///////////////////////////////
@@ -1185,7 +1200,7 @@ func getKeyDerivationParams(keyDerivationString string) (uint64, []byte, []byte,
 ////////////////////////////////////
 
 // Compress a given string with front coding relative to the previous uncompressed string based on the common prefix length
-func FrontCode(prev string, str string) ([]byte) {
+func frontCode(prev string, str string) ([]byte) {
 	// We will iterate through one of them. We choose the one with less characters.
 	n := len(prev)
 	if len(str) < n {n = len(str)}
@@ -1202,7 +1217,7 @@ func FrontCode(prev string, str string) ([]byte) {
 	return compressed
 }
 // Decompress a given front coded string using the previous uncompressed string
-func FrontDecode(prev string, compressed []byte) (string, error) {
+func frontDecode(prev string, compressed []byte) (string, error) {
 	prefixLen, n := binary.Uvarint(compressed)
 	if n <= 0 { return "", errors.New("invalid or corrupted varint encoding") }
 	if len(prev) < int(prefixLen) { return "", errors.New("prefix length exceeds previous string length")}

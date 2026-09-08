@@ -2,7 +2,7 @@
 <p align="left">
 <img src="https://github.com/zenarvus/sec2m-go/raw/refs/heads/main/logo.png" width="155" alt="Sec2M Logo" align="left"/>
 <h3>Got secrets to keep?</h3>
-<p>Sec2M is a CLI based, one-file secrets manager for cool kids who love security and minimalism.</p>
+<p>Got secrets to keep? Sec2m is a local, serverless and daemonless, CLI based secrets manager that uses SDB file format with no runtime dependencies. Written in golang, for cool kids.</p>
   
 ![GitHub Repo stars](https://img.shields.io/github/stars/zenarvus/sec2m-go?style=for-the-badge&color=darkred)
 ![GitHub forks](https://img.shields.io/github/forks/zenarvus/sec2m-go?style=for-the-badge&color=darkred)
@@ -46,7 +46,7 @@ git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build main.g
 Now you are ready to go!
 
 ## Roadmap
-Allocate critical memory directly with system calls and manage them manually, bypassing GC runtime
+Improve CLI side
 
 ## Help
 ```
@@ -136,6 +136,11 @@ To import everything from it, use the following command in shell:
 `migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to the flat list. Then, you can use the command above to import it.
 - Note: It's actually a go code wrapped in a shell script. Make sure you installed go.
 
+## Dos and Nos
+**NEVER** pass an entry value to an external script as commanline arguments! Always pass it via stdin instead. Arguments will be visible to other processes and will leak your secrets.
+
+Arguments passed to internal commands will be hidden to other processes. Meaning, you can pass entry values to them relatively securely, but they will be visible in session history. Try to prefer providing them as stdin or via provided user input request.
+
 ## SDB Format
 ```go
 type File struct {
@@ -186,7 +191,7 @@ Password: The input user writes in
 Salt: A random set of bytes created on vault initialization. It's permanent per vault. Guarantees that the derived key is completely unique per vault, even if two vaults use the identical password.
 
 Nonce(): A random set of bytes. Generated uniquely from scratch for every single encryption operation. Ensures that saving the vault generates unique ciphertext every time, even if the data inside hasn't changed.
-FieldNonce(): HashAlgorithm(MTime || EntryPath).NonceSize() Guarantineed uniqueness as mtime is strictly different on each update
+FieldNonce(): HashAlgorithm(MTime || EntryPath).NonceSize() Deterministic nonce is used instead of a random generated one to optimize file size by eliminating a separate nonce field. It provides guarantineed uniqueness as mtime difference is enforced by the library on each update.
 
 DerivedKey = KeyDerivationAlgorithm(password, salt)
 
