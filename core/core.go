@@ -174,12 +174,17 @@ func (s *Session) Destroy() {
 	os.Remove(s.Filepath+".lock")
 }
 
-// InitSession creates a brand new vault file with given parameters.
+// InitSession creates a brand new vault file with given parameters. If a vault with that name already exists, give error.
 func InitSession(
 	filepath string,
 	password []byte,
 	kdAlgoStr, seAlgoStr, hashAlgoStr string,
 ) (*Session, error) {
+	// Check if the vault file already exists
+	if _, err := os.Stat(filepath); err == nil {
+		return nil, errors.New("a vault file with this name already exists")
+	} else if !os.IsNotExist(err) { return nil, err }
+
 	// Try to create a lock file. Exit if it already exists or gives an error.
 	file, err := os.OpenFile(filepath+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -362,6 +367,7 @@ func (s *Session) VaultChange(
 	// get the old plaintext inner encryption key
 	oldPlaintextInnerEncKey, deallocOldInnEncKey, err := oldInnerEncKey.Get(tmpSKey, s.Header.SEAlgo)
 	deallocTmpSkey() // we do not need generated tmp session key anymore. It was used only to encrypt oldInnerEncKey
+	defer deallocOldInnEncKey() // ensure old key cleared from memory
 	if err != nil {return err}
 
 	oldEncAlgo := s.Header.SEAlgo
@@ -369,7 +375,10 @@ func (s *Session) VaultChange(
 
 	// Decrypt the current inner encryption key
 	expectedInnEncKey, deallocExpectedInn, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
-	if err != nil {return err}
+	if err != nil {
+		deallocOldInnEncKey()
+		return err
+	}
 
 	// Compare them and give error if they do not match
 	if !bytes.Equal(oldPlaintextInnerEncKey, expectedInnEncKey) {
@@ -381,7 +390,7 @@ func (s *Session) VaultChange(
 	// If we are here, the provided password is correct. Update the vault settings.
 
 	kdAlgo, salt, kdParams, err := getKeyDerivationParams(kdAlgoStr)
-	if err != nil {return err}
+	if err != nil { deallocOldInnEncKey(); return err}
 
 	seAlgo := algoStrToNumMap[seAlgoStr]
 	hashAlgo := algoStrToNumMap[hashAlgoStr]
@@ -396,13 +405,15 @@ func (s *Session) VaultChange(
 	// Generate the new keys from the new password
 
 	derivedKey,deallocNewDerived,err := deriveKey(newpass, s.Header.KDSalt, s.Header.KDAlgo, s.Header.SEAlgo, s.Header.KDParams)
-	if err != nil {return err}
+	if err != nil { return err}
 
 	newSessK,deallocNewSessK, newOutEncK, newInnEncK, newMacK, err := getVaultKeys(
 		derivedKey, polysha.SHAType(s.Header.HashAlgo), s.Header.SEAlgo,
 	)
 	deallocNewDerived()
 	if err != nil {return err}
+
+	s.SessKeyDealloc() // Deallocate the old key
 
 	// Update the session key
 	s.SessionKey = newSessK
@@ -414,10 +425,7 @@ func (s *Session) VaultChange(
 
 	// Decrpyt the new inner encryption key
 	plaintextNewInnEncK, deallocNewInnEncK, err := newInnEncK.Get(newSessK, s.Header.SEAlgo)
-	if err != nil {
-		deallocOldInnEncKey()
-		return err
-	}
+	if err != nil { return err }
 
 	// Update the inner encryptions from old to new
 	for _,entry := range s.EntryMap {
@@ -447,8 +455,7 @@ func (s *Session) VaultChange(
 		deallocPlaintextVal()
 	}
 
-	// Deallocate the old and new plaintext inner encryption key
-	deallocOldInnEncKey()
+	// Deallocate the new plaintext inner encryption key
 	deallocNewInnEncK()
 
 	// Save the session to the file with updated parameters

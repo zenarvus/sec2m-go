@@ -12,35 +12,35 @@
 <br clear="left"/>
 
 ## Features
-\> Everything stays local with a small and simple, Compack serialized `.sdb` file format
+**>** Everything stays local with a small and simple, Compack serialized `.sdb` file format
 
-\> Strong and flexible cryptographic primitive list containing xchacha20, sha3-256 and argon2id
+**>** Strong and flexible cryptographic primitive list containing xchacha20, sha3-256 and argon2id
 
-\> Whole file HMAC integrity check using the Encrypt-Then-MAC scheme
+**>** Whole file HMAC integrity check using the Encrypt-Then-MAC scheme
 
-\> Additional per-value encryption for in-memory security
+**>** Additional per-value encryption for in-memory security
 
-\> Per-Session-Key to store encryption and signature keys securely on memory
+**>** Per-Session-Key to store encryption and signature keys securely on memory
 
-\> Core-dumping prevention and memory locking for the session key on supported platforms (android & linux)
+**>** Core-dumping prevention and memory locking for the session key on supported platforms (android & linux)
 
-\> Explicit variable zeroing after usage (not when passed as literal command arguments)
+**>** Explicit secret zeroing and deallocation after usage (not when passed as literal positional arguments)
 
-\> Extensible `[POSIX Portable Filepath] -> [Binary Value]` array structure. Like UNIX, everything is an entry
+**>** Extensible `[POSIX Portable Filepath] -> [Binary Value]` array structure. Like UNIX, everything is an entry
 
-\> Shell like directory navigation using `cd`, `ls` and `lsall`
+**>** Shell like directory navigation using `cd`, `ls` and `lsall`
 
-\> Internal shell session with auto completions, system binary execution, command substitutions and pipelines
+**>** Internal shell session with auto completions, system binary execution, command substitutions and pipelines
 
-\> Command aliasing using the entries in `/.shortcut/`
+**>** Command aliasing using the entries in `/.shortcut/`
 
-\> TOTP, Clipboard copy/clearing, password generation and more with helper scripts
+**>** TOTP, Clipboard copy/clearing, password generation and more with helper scripts
 
 ## Installation
 Sec2M is a single binary application with no external runtime dependencies nor config files. You just need go and git to install it.
 
 ```bash
-git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build main.go
+git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build .
 ```
 
 Now you are ready to go!
@@ -50,65 +50,122 @@ Improve CLI side, move parser logic to an another file and write a test file for
 
 ## Help
 ```
-Usage: VAULT=/path/to/file sec2m <command> [args...]
+Usage: VAULT=/path/to/file.sdb sec2m <command> [args]
 
-=== MAIN COMMANDS ===
-init <dalg> <ealg> <halg>   - Init the vault file in VAULT location
-change <dalg> <ealg> <halg> - Change the given vault's algorithms and password
-help                        - Write this output
-shell                       - Long lived sec2m shell session you can execute commands
-shot <cmds>                 - Execute a sec2m shell pipeline command and exit
-info                        - Print info about the version, header and signature of the file
+The binary requires VAULT environment variable pointing to a .sdb file.
 
-=== ALGORITHMS ===
+"=== VAULT COMMANDS ==="
+init <dalg> <ealg> <halg>: Init the vault file in VAULT location. Gives error if it already exists.
+
+change <dalg> <ealg> <halg>: Updates the vault algorithms and password in VAULT location. Will ask for the old password one time and the new one for two times.
+
+== ALGORITHMS ==
 Key Derivation (<dalg>):
-  - argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters. <slen> is the length of the salt, <iter> is the amount of iterations, <mem> is the required memory in megabytes and <thread> is the amount of threads it will run. Recommended: <slen:16>, <iter:4>, <mem:256>, <thread:2>
+	- argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters.
+		- <slen>: Length of the salt (Recommended: 16)
+		- <iter>: The amount of iterations (Recommended: 4)
+		- <mem>: Required memory in megabytes (Recommended: 256)
+		- <thread>: Amount of threads used (Recommended: 2)
 
 Symmetric Encryption (<ealg>):
-  - aes-cbc-256: AES-256 with CBC mode
-  - xchacha20: CHACHA20 with 24 byte nonce size (recommended)
+	- aes-cbc-256: AES-256 with CBC mode
+	- xchacha20: CHACHA20 with 24 byte nonce size (Recommended)
 
 Hashing (<halg>):
-  - sha2-256: 32 byte sha2-256
-  - sha3-256: 32 byte sha3-256 (recommended)
-  - sha3-384: 48 byte sha3-384
-  - sha3-512: 64 byte sha3-512
-  - blake3-256: 32 byte blake3
+	- sha2-256: 32 byte sha2-256
+	- sha3-256: 32 byte sha3-256 (Recommended)
+	- sha3-384: 48 byte sha3-384
+	- sha3-512: 64 byte sha3-512
+	- blake3-256: 32 byte blake3
 
-=== COMMANDS ===
-put <epath> <value>          - Insert an entry to the vault
-mput <epath> <mtime> <value> - Put an entry by overwriting an existing one if passed mtime is larger
-update <epath> <value>       - Update an entry in the vault
-get <epath>                  - Get the value using entry path
-mtime <epath>                - Get the modification time of an entry
-rm <epath>                   - Delete an entry from the vault
-rmd <dpath>                  - Delete a directory from the vault
-mv <oldpath> <newpath>       - Rename an entry in the vault
+=== MAIN COMMANDS ===
+help: Write this output
 
-exec [args]              - Execute a system binary with given arguments
-eval <cmds>              - Run given command pipeline from stdin or as an argument
-iter <cmds>              - Split the provided stdin by newlines, iterate through them and execute the provided command in every iteration while passing the item as stdin
+shell: Long lived sec2m shell session you can execute commands
 
-ls <dpath>               - Print the items in the path in vault
-cd <dpath>               - Change the current directory to the given path in vault
-lsall <dpath>            - List all the keys in the given dir and in all of it's subdirs
+shot <pipeline>: Execute a sec2m shell pipeline and exit
 
-senv <name> <value>      - Set an environment variable in the shell session and write to stdout
-genv <name>              - Get an environment variable from the session
-renv <name>              - Wipe an environment variable from the memory securely
+<cmd> [args]: Execute a single command with provided argument
+
+info: Print info about the version, header and signature of the file
+
+=== COMMAND REFERENCE ===
+put <epath> <value>: Inserts a new entry to the vault. Gives error if it already exists.
+- Ingests "<epath>" and/or "<value>" separated by "\n" or asks for user input.
+
+mput <epath> <mtime> <value>: Inserts an entry and overwrites the existing one if passed unix epoch (<mtime>) is larger.
+- Ingests missing arguments via "\n" split "stdin" or asks for user input.
+
+update <epath> <value>: Updates an existing vault entry.
+- Ingests missing arguments via "stdin" or asks for user input. Prompts for "(y/n)" confirmation.
+
+get <epath>: Gets the value using entry path.
+- Ingests "<epath>" from "stdin" if missing.
+
+mtime <epath>: Gets the modification time of an entry
+- Ingests "<epath>" from "stdin" if missing.
+
+rm <epath>: Deletes an entry from the vault.
+- Ingests "<epath>" from "stdin" if missing. Prompts for "(y/n)" confirmation.
+
+rmd <dpath>: Deletes a directory from the vault.
+- Ingests "<dpath>" from "stdin" if missing. Prompts for "(y/n)" confirmation.
+
+mv <oldpath> <newpath>: Renames a vault entry.
+- Ingests missing arguments via "stdin".
+
+==========
+
+exec [args]: Executes a system binary.
+- Forwards incoming stdin to external command stdin.
+
+eval <pipeline>: Runs given command pipeline.
+- Ingests command string from "stdin" if missing.
+
+iter <pipeline>: Splits the provided stdin by newlines and iterates through them.
+- Runs "<pipeline>" repeatedly, passing each line as "stdin".
+
+==========
+
+ls <dpath>: Print the items in the given path in vault
+- Prints items in the current directory if <dpath> is missing.
+
+cd <dpath>: Change the current directory to the given path in vault
+- Changes the directory to root if <dpath> is missing.
+
+lsall <dpath>: List all the keys in the given dir and in all of it's subdirs
+- Prints items in the current directory and it's sub-directories if <dpath> is missing.
+
+==========
+
+senv <name> <value>: Sets an environment variable in the shell session.
+- Ingests "<name>" and "<value>" from "stdin" if missing.
+
+genv <name>: Get an environment variable from the session
+- Ingests "<name>" from "stdin" if missing.
+
+renv <name>: Wipe an environment variable from the memory securely
+- Ingests "<name>" from "stdin" if missing.
+
+=== PIPING COMMANDS ===
+Commands can be chained using the pipe operator ("|"). Output from the left command is passed directly as standard input to the right command.
+
+The following code copies the result of get command to the clipboard if "wl-clipboard" is installed.
+- 'get /github/name | exec wl-copy'
+
+=== COMMAND SUBSTITUTION ===
+Arguments wrapped in "$(...)" are evaluated dynamically as internal commands before the outer command executes. The output of the inner command replaces the substitution token.
+
+Copy a secret value from one path to another dynamically:
+- put /backup/token $(get /tokens/github)
+
+=== SHORTCUTS ===
+Shortcuts act as customizable CLI aliases stored directly inside the encrypted vault under the "/.shortcut/" directory. They support positional argument placeholders ("{1}", "{2}", "{3}", etc.) Unsupplied placeholders are automatically removed prior to command execution.
+
+To define a shortcut named "cget" that copies the secret to the clipboard, create an entry in "/.shortcut/cget":
+- 'put /.shortcut/cget "get {1} | exec wl-copy"'
+- Usage: cget /github/name
 ```
-
-## Quick Pipeline & Shortcut Guide
-You can execute commands and pipe them from left to right using the `|` character. The following code copies the result of get command to the clipboard if `wl-clipboard` is installed.
-- `get /github/name | exec wl-copy`
-
-Shortcuts are epath/value entries in `/.shortcut/` root where entry name is the command alias and the value is the actual command you want to run.
-
-For example, this shell command adds a `cget` shortcut which executes `get {1} | exec wl-copy` command.
-- `put /.shortcut/cget "get {1} | exec wl-copy"`
-
-`{1}` is the first argument provided to `cget`. You can also use `{2}`, `{3}` etc. if the shortcut command requires more arguments. Here is the example usage of `cget` which copies `/github/name` to the clipboard:
-- `cget /github/name`
 
 ## Import & Export
 It's convenient to use a flat list of `[entry path] [base64 encoded value] [modification time]` separated with `\n` on imports and exports. So `migration.sh` folder contains helper scripts using this format. (requires base64 binary)
@@ -138,9 +195,9 @@ To import everything from it, use the following command in shell:
 - Note: It's actually a go code wrapped in a shell script. Make sure you installed go.
 
 ## Dos and Nos
-**NEVER** pass an entry value to an external script as commanline arguments! Always pass it via stdin instead. Arguments will be visible to other processes and will leak your secrets.
+**NEVER** pass an entry value to an external script as positional arguments! Always pass it via stdin instead. Positional arguments will be visible to other processes and will leak your secrets.
 
-Arguments passed to internal commands will be hidden to other processes. Meaning, you can pass entry values to them relatively securely, but they will be visible in session history. Try to prefer providing them as stdin or via provided user input request.
+Positional arguments passed to internal commands will be hidden to other processes. Meaning, you can pass entry values to them relatively securely, but they will be visible in session history. Try to prefer providing them as stdin or via provided input request.
 
 ## SDB Format
 ```go

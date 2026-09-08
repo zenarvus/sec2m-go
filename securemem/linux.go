@@ -48,7 +48,7 @@ func Alloc(size int, opts ...Option) ([]byte, func(), error) {
 
 	// Advise kernel to exclude this memory region from coredumps
 	_ = unix.Madvise(b, unix.MADV_DONTDUMP)
-	// Advise kernel to release pages eagerly when freed and avoid merge overheads
+	// Advise kernel to release pages eagerly when freed
 	_ = unix.Madvise(b, unix.MADV_NOHUGEPAGE)
 
 	// Lock to the RAM if it's explicitly enabled

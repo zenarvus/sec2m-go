@@ -38,94 +38,6 @@ import (
 	"golang.org/x/term"
 )
 
-/*
-const (
-	CMD_INIT_DESC = "Init the vault file in the location provided with VAULT environment variable."
-	CMD_INIT_USAGE = "'init <dalg> <ealg> <halg>':"
-
-	CMD_CHANGE_DESC = ""
-)
-*/
-func printMainHelp() {
-	fmt.Println("Usage: VAULT=/path/to/file sec2m <command> [args...]")
-	fmt.Println()
-	fmt.Println("=== MAIN COMMANDS ===")
-	fmt.Println("init <dalg> <ealg> <halg>   - Init the vault file in VAULT location")
-	fmt.Println("change <dalg> <ealg> <halg> - Change the given vault's algorithms and password")
-	fmt.Println("help                        - Write this output")
-	fmt.Println("shell                       - Long lived sec2m shell session you can execute commands")
-	fmt.Println("shot <cmds>                 - Execute a sec2m shell pipeline command and exit")
-	fmt.Println("info                        - Print info about the version, header and signature of the file")
-	fmt.Println()
-	fmt.Println("=== ALGORITHMS ===")
-	fmt.Println("Key Derivation (<dalg>):")
-	fmt.Println("  - argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters. <slen> is the length of the salt, <iter> is the amount of iterations, <mem> is the required memory in megabytes and <thread> is the amount of threads it will run. Recommended: <slen:16>, <iter:4>, <mem:256>, <thread:2>")
-	fmt.Println()
-	fmt.Println("Symmetric Encryption (<ealg>):")
-	fmt.Println("  - aes-cbc-256: AES-256 with CBC mode")
-	fmt.Println("  - xchacha20: CHACHA20 with 24 byte nonce size (recommended)")
-	fmt.Println()
-	fmt.Println("Hashing (<halg>):")
-	fmt.Println("  - sha2-256: 32 byte sha2-256")
-	fmt.Println("  - sha3-256: 32 byte sha3-256 (recommended)")
-	fmt.Println("  - sha3-384: 48 byte sha3-384")
-	fmt.Println("  - sha3-512: 64 byte sha3-512")
-	fmt.Println("  - blake3-256: 32 byte blake3")
-}
-func printShellHelp() {
-	fmt.Println("Usage: <command> [args...]")
-	fmt.Println()
-	fmt.Println("=== SHELL ===")
-	fmt.Println("help - Write this output")
-	fmt.Println("exit - Exit from the sec2m shell")
-}
-func printCommonHelp() {
-	fmt.Println("=== COMMANDS ===")
-	fmt.Println("put <epath> <value>          - Insert an entry to the vault")
-	fmt.Println("mput <epath> <mtime> <value> - Put an entry by overwriting an existing one if passed mtime is larger")
-	fmt.Println("update <epath> <value>       - Update an entry in the vault")
-	fmt.Println("get <epath>                  - Get the value using entry path")
-	fmt.Println("mtime <epath>                - Get the modification time of an entry")
-	fmt.Println("rm <epath>                   - Delete an entry from the vault")
-	fmt.Println("rmd <dpath>                  - Delete a directory from the vault")
-	fmt.Println("mv <oldpath> <newpath>       - Rename an entry in the vault")
-	fmt.Println()
-	fmt.Println("exec [args]              - Execute a system binary with given arguments")
-	fmt.Println("eval <cmds>              - Run given command pipeline from stdin or as an argument")
-	fmt.Println("iter <cmds>              - Split the provided stdin by newlines, iterate through them and execute the provided command in every iteration while passing the item as stdin")
-	fmt.Println()
-	fmt.Println("ls <dpath>               - Print the items in the path in vault")
-	fmt.Println("cd <dpath>               - Change the current directory to the given path in vault")
-	fmt.Println("lsall <dpath>            - List all the keys in the given dir and in all of it's subdirs")
-	fmt.Println()
-	fmt.Println("senv <name> <value>      - Set an environment variable in the shell session and write to stdout")
-	fmt.Println("genv <name>              - Get an environment variable from the session")
-	fmt.Println("renv <name>              - Wipe an environment variable from the memory securely")
-}
-func printVaultInfo(file *core.File, header *core.UnmarshaledHeader) {
-	var argon2idParams core.Argon2IDParams
-	_ = cmpck.Unmarshal(header.KDParams, &argon2idParams)
-	fmt.Println("=== FILE INFO ===")
-	fmt.Println("Vault-Version:", file.Version)
-	fmt.Println("Key-Derivation-Algorithm:", header.KDAlgo)
-	fmt.Println("Argon2ID-Iterations:", argon2idParams.Iterations)
-	fmt.Println("Argon2ID-Memory:", argon2idParams.Memory)
-	fmt.Println("Argon2ID-Parallelism:", argon2idParams.Threads)
-	fmt.Printf("Key-Derivation-Salt: %x\n", header.KDSalt)
-	fmt.Println("Encryption-Algorithm:", header.SEAlgo)
-	fmt.Printf("Encryption-Nonce: %x\n", header.SENonce)
-	fmt.Println("Hash-Algorithm:", header.HashAlgo)
-	fmt.Printf("Signature: %x\n", file.Signature)
-}
-func printShortcuts(sess *core.Session) {
-	fmt.Println("=== SHORTCUTS ===")
-	shortcuts := getShortcuts(sess)
-	if len(shortcuts) == 0 {fmt.Println("No shortcuts exist")}
-	for key, val := range shortcuts {
-		fmt.Printf("'%s' => %s\n", key, val)
-	}
-}
-
 func main() {
 	// Disable core dumps and ptrace attachment
 	if err := securemem.Setup(); err != nil {
@@ -453,7 +365,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 		putArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, true)
 		if err != nil {
-			return nil, func(){}, errors.New("Usage: <?stdin:epath:\n:value> | put <?epath> <?value>\n"+err.Error())
+			return nil, func(){}, errors.New("Usage: put <epath> <value>\n"+err.Error())
 		}
 
 		err = sess.Put(string(putArgs[0]), []byte{}, putArgs[1])
@@ -466,7 +378,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 		mputArgs, err := getArgsFromArgsNStdin(3, args[1:], pipeStdin, true)
 		if err != nil {
-			return []byte{},func(){}, errors.New("Usage: <?stdin:epath:\n:mtime:\n:value> | put <?epath> <?mtime> <?value>\n"+err.Error())
+			return []byte{},func(){}, errors.New("Usage: put <epath> <mtime> <value>\n"+err.Error())
 		}
 
 		var epath = mputArgs[0]
@@ -488,7 +400,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	case "update":
 		updateArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, true)
 		if err != nil {
-			return nil,func(){}, errors.New("Usage: <?stdin:epath:\n:value> | update <?epath> <?value>\n"+err.Error())
+			return nil,func(){}, errors.New("Usage: update <epath> <value>\n"+err.Error())
 		}
 
 		var epath = updateArgs[0]
@@ -510,7 +422,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 		mtimeArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
 		if err != nil {
-			return nil,func(){}, errors.New("Usage: <?stdin:epath> | mtime <?epath>\n"+err.Error())
+			return nil,func(){}, errors.New("Usage: mtime <epath>\n"+err.Error())
 		}
 
 		var epath = string(mtimeArgs[0])
@@ -532,7 +444,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	case "get": // Get an entry's value
 		getArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
 		if err != nil {
-			return nil,func(){}, errors.New("Usage: <?stdin:epath> | get <?epath>\n"+err.Error())
+			return nil,func(){}, errors.New("Usage: get <epath>\n"+err.Error())
 		}
 
 		var epath = getArgs[0]
@@ -544,7 +456,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	case "mv":
 		mvArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, false)
 		if err != nil {
-			return nil,func(){},errors.New("Usage: <?stdin:old:\n:new>| mv <?old> <?new>\n"+err.Error())
+			return nil,func(){},errors.New("Usage: mv <old> <new>\n"+err.Error())
 		}
 
 		var oldpath = string(mvArgs[0])
@@ -563,7 +475,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	case "rm": // Remove a single entry
 		rmArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
 		if err != nil {
-			return nil,func(){}, errors.New("Usage: <?stdin:epath> | rm <?epath>\n"+err.Error())
+			return nil,func(){}, errors.New("Usage: rm <epath>\n"+err.Error())
 		}
 
 		var epath = string(rmArgs[0])
@@ -587,7 +499,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		
 	case "rmd": // Remove a directory
 		rmdArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
-		if err != nil { return nil,func(){}, errors.New("Usage: <?stdin:dpath> | rmd <?dpath>\n"+err.Error()) }
+		if err != nil { return nil,func(){}, errors.New("Usage: rmd <dpath>\n"+err.Error()) }
 
 		var dpath = string(rmdArgs[0])
 
@@ -621,7 +533,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			dirs, entries, err = sess.Ls(string(args[1]))
 			if err != nil { return nil,func(){}, err }
 
-		} else { return nil,func(){}, errors.New("Invalid arguments. Usage: ls <?dpath>") }
+		} else { return nil,func(){}, errors.New("Invalid arguments. Usage: ls <dpath>") }
 
 		// Sort the dirs slice
 		sort.Slice(dirs, func(i, j int) bool {
@@ -657,7 +569,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			entries, err = sess.Lsall(string(args[1]))
 			if err != nil { return nil,func(){}, err }
 
-		} else { return nil,func(){}, errors.New("Invalid arguments. Usage: lsall <?dpath>") }
+		} else { return nil,func(){}, errors.New("Invalid arguments. Usage: lsall <dpath>") }
 
 		// Sort the entries slice
 		sort.Slice(entries, func(i, j int) bool {
@@ -682,7 +594,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			err := sess.Cd(string(args[1]))
 			if err != nil { return nil,func(){}, err }
 
-		} else { return nil, func(){}, errors.New("Invalid arguments. Usage: cd <?dpath>") }
+		} else { return nil, func(){}, errors.New("Invalid arguments. Usage: cd <dpath>") }
 
 		return nil, func(){}, nil
 
@@ -719,7 +631,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 	case "eval":
 		evalArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
-		if err != nil { return nil,func(){}, errors.New("Usage: <?stdin:command> | eval <?command>\n"+err.Error()) }
+		if err != nil { return nil,func(){}, errors.New("Usage: eval <pipeline>\n"+err.Error()) }
 
 		var cmd = evalArgs[0]
 		cmdArgs, err := parseArgs(cmd)
@@ -729,7 +641,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 	// Read the stdin, split it with the given delimiter, iterate through them and execute the provided command in every iteration
 	case "iter":
-		if len(args) != 2 { return nil,func(){}, errors.New("Invalid aruments. Usage: iter 'piped | commands'")}
+		if len(args) != 2 { return nil,func(){}, errors.New("Invalid aruments. Usage: iter <pipeline>")}
 		
 		lines := bytes.Split(pipeStdin, []byte{'\n'})
 
@@ -751,9 +663,9 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return finalResult,deallocateFn, nil
 	
 	case "senv":
-		senvArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, true)
+		senvArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, false)
 		if err != nil {
-			return nil,func(){}, errors.New("Usage: <?stdin:name:\n:value> | senv <?name> <?value>\n"+err.Error())
+			return nil,func(){}, errors.New("Usage: senv <name> <value>\n"+err.Error())
 		}
 
 		err = sess.Senv(string(senvArgs[0]), senvArgs[1]) // Senv zeroes the value
@@ -763,7 +675,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 	case "genv":
 		genvArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
-		if err != nil { return nil,func(){}, errors.New("Usage: <?stdin:name> | genv <?name>\n"+err.Error()) }
+		if err != nil { return nil,func(){}, errors.New("Usage: genv <name>\n"+err.Error()) }
 
 		val,dealloc,err := sess.Genv(string(genvArgs[0]))
 		if err!=nil{return nil,func(){}, err}
@@ -772,7 +684,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 	case "renv":
 		renvArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
-		if err != nil { return nil,func(){}, errors.New("Usage: <?stdin:name> | renv <?name>\n"+err.Error()) }
+		if err != nil { return nil,func(){}, errors.New("Usage: renv <name>\n"+err.Error()) }
 
 		sess.Renv(string(renvArgs[0]))
 
