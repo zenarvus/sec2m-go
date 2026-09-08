@@ -2,7 +2,7 @@
 <p align="left">
 <img src="https://github.com/zenarvus/sec2m-go/raw/refs/heads/main/logo.png" width="155" alt="Sec2M Logo" align="left"/>
 <h3>Got secrets to keep?</h3>
-<p>Got secrets to keep? Sec2m is a local, serverless and daemonless, CLI based secrets manager that uses SDB file format with no runtime dependencies. Written in golang, for cool kids.</p>
+<p>Sec2m is a local, serverless and daemonless, CLI based secrets manager that uses SDB file format with no runtime dependencies. Written in golang, for cool kids.</p>
   
 ![GitHub Repo stars](https://img.shields.io/github/stars/zenarvus/sec2m-go?style=for-the-badge&color=darkred)
 ![GitHub forks](https://img.shields.io/github/forks/zenarvus/sec2m-go?style=for-the-badge&color=darkred)
@@ -46,7 +46,7 @@ git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build main.g
 Now you are ready to go!
 
 ## Roadmap
-Improve CLI side
+Improve CLI side, move parser logic to an another file and write a test file for the parser.
 
 ## Help
 ```
@@ -115,13 +115,14 @@ It's convenient to use a flat list of `[entry path] [base64 encoded value] [modi
 
 To export everything in this flat list format, use the following command in shell:
 
-`lsall / | iter "senv EXPORT | get | exec /path/to/exporter.sh $(genv EXPORT) $(genv EXPORT | mtime)"`
+`lsall / | iter "senv EXP | genv EXP | get | exec /path/to/exporter.sh $(genv EXP) $(genv EXP | mtime)"`
 
 - `lsall /`: Prints every entry in the vault
 - `iter [cmd]`: Iterates on them line by line and executes the command
-- `senv EXPORT`: Sets the entry path as an environment variable, also writes it to output
-- `get`: Gets the entry value from that output
-- `exec /path/to/exporter.sh $(genv EXPORT) $(genv EXPORT | mtime)"`: Executes exporter.sh with stdin from get and path and modification time as arguments
+- `senv EXP`: Sets the entry path as an environment variable
+- `genv EXP`: Get the value of EXP
+- `get`: Gets the entry value from the path provided from pipe
+- `exec /path/to/exporter.sh $(genv EXP) $(genv EXP | mtime)"`: Executes exporter.sh with stdin from get and path and modification time as arguments
 
 To import everything from it, use the following command in shell:
 
