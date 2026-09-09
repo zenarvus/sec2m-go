@@ -255,7 +255,6 @@ Password: The input user writes in
 Salt: A random set of bytes created on vault initialization. It's permanent per vault. Guarantees that the derived key is completely unique per vault, even if two vaults use the identical password.
 
 Nonce(): A random set of bytes. Generated uniquely from scratch for every single encryption operation. Ensures that saving the vault generates unique ciphertext every time, even if the data inside hasn't changed.
-FieldNonce(): HashAlgorithm(MTime || EntryPath).NonceSize() Deterministic nonce is used instead of a random generated one to optimize file size by eliminating a separate nonce field. (Mtime || EntryPath) combination MUST be unique for every entry.
 
 DerivedKey = KeyDerivationAlgorithm(password, salt)
 
@@ -273,7 +272,7 @@ EncryptedMacKey = Encryption(MessageAuthenticationCodeKey, SessionKey, Nonce())
 
 # OuterEncryptionKey, InnerEncryptionKey and MessageAuthenticationCodeKey are removed from memory here. We store the encrypted ones and decrypt them on demand.
 
-EncryptedFieldValue = Encryption(value, InnerEncryptionKey, FieldNonce())
+EncryptedFieldValue = Encryption(value, InnerEncryptionKey, Nonce())
 EncryptedBody = Encryption(body, OuterEncryptionKey, Nonce())
 Signature = HMAC(MessageAuthenticationCodeKey, Version, Header, EncryptedBody) # Uses the provided hash algorithm for the HMAC signature. Authenticates the file version, headers and the encrypted data before decryption, and verifies if the password is correct.
 ```

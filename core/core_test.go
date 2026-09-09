@@ -70,7 +70,7 @@ func TestLowLevelEncryption(t *testing.T) {
 
 	for _, tc := range algorithms {
 		t.Run(tc.name, func(t *testing.T) {
-			nonce, ciphertext, err := encryptData(plaintext, key, nil, tc.algo)
+			nonce, ciphertext, err := encryptData(plaintext, key, tc.algo)
 			if err != nil {
 				t.Fatalf("encryptData failed: %v", err)
 			}

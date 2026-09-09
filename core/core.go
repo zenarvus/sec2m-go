@@ -124,6 +124,7 @@ type UnencryptedBody struct {
 type Entry struct {
 	Path []byte `cmpck:"1"` // The front coded path of the entry (decoded in session)
 	Value []byte `cmpck:"2"`  // The value encrypted with inner key
+	Nonce []byte `cmpck:"3"`
 	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
 }
 type Argon2IDParams struct {
@@ -401,7 +402,6 @@ func (s *Session) VaultChange(
 	if err != nil {return err}
 
 	oldEncAlgo := s.Header.SEAlgo
-	oldHashAlgo := s.Header.HashAlgo // Required for generating nonces in decryption
 
 	// Decrypt the current inner encryption key
 	expectedInnEncKey, deallocExpectedInn, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
@@ -459,29 +459,17 @@ func (s *Session) VaultChange(
 
 	// Update the inner encryptions from old to new
 	for _,entry := range s.EntryMap {
-		// the old nonce withold ""hashing algorithm
-		oldNonce,err := polysha.HashRaw(
-			polysha.SHAType(oldHashAlgo),
-			append(entry.MTime, entry.Path...),
-		)
-		if err != nil { return err }
 
 		// Decrypt the value using old parameters
-		plaintextVal,deallocPlaintextVal, err := unencryptData(entry.Value, oldNonce, oldPlaintextInnerEncKey, oldEncAlgo)
+		plaintextVal,deallocPlaintextVal, err := unencryptData(entry.Value, entry.Nonce, oldPlaintextInnerEncKey, oldEncAlgo)
 		if err != nil { deallocPlaintextVal(); return err }
-
-		// new nonce with new hash algorithm
-		newNonce,err := polysha.HashRaw(
-			polysha.SHAType(s.Header.HashAlgo),
-			append(entry.MTime, entry.Path...),
-		)
-		if err != nil { return err }
 		
 		// Encrypt it with the new ones
-		_, newVal, err := encryptData(plaintextVal, plaintextNewInnEncK, newNonce, s.Header.SEAlgo)
+		newnonce, newVal, err := encryptData(plaintextVal, plaintextNewInnEncK, s.Header.SEAlgo)
 		if err != nil { deallocPlaintextVal(); return err }
 
 		entry.Value = newVal
+		entry.Nonce = newnonce
 		deallocPlaintextVal()
 	}
 
@@ -534,7 +522,7 @@ func (s *Session) SaveAs(filePath string) error {
 	if err != nil {return err}
 
 	// Encrypt the body using plainOutEncKey
-	nonce,encryptedData, err := encryptData(unencryptedBodyBytes, plainOutEncKey, nil, s.Header.SEAlgo)
+	nonce,encryptedData, err := encryptData(unencryptedBodyBytes, plainOutEncKey, s.Header.SEAlgo)
 	deallocOutEncKey() // Remove outenckey from memory.
 	if err!=nil{return err}
 
@@ -614,17 +602,8 @@ func (s *Session) Get(key string) ([]byte, func(), error) {
 	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return nil,func(){}, err}
 
-	nonce,err := polysha.HashRaw(
-		polysha.SHAType(s.Header.HashAlgo),
-		append(entry.MTime, entry.Path...),
-	)
-	if err != nil {
-		deallocInnEncKey()
-		return nil,func(){}, err
-	}
-
 	// Decrypt and return the value with the inner encryption key
-	value,deallocVal, err := unencryptData(entry.Value, nonce, plainInnEncKey, s.Header.SEAlgo)
+	value,deallocVal, err := unencryptData(entry.Value, entry.Nonce, plainInnEncKey, s.Header.SEAlgo)
 	deallocInnEncKey()
 	if err != nil {return nil,func(){},err}
 
@@ -670,14 +649,8 @@ func (s *Session) Put(epath string, mtime []byte, value []byte) error {
 	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
-	nonce,err := polysha.HashRaw(
-		polysha.SHAType(s.Header.HashAlgo),
-		append(mTimeBytes, []byte(epath)...),
-	)
-	if err != nil { deallocInnEncKey(); return err}
-
 	// Encrypt the value with the key
-	_, chiphertext, err := encryptData(value, plainInnEncKey, nonce, s.Header.SEAlgo)
+	nonce, chiphertext, err := encryptData(value, plainInnEncKey, s.Header.SEAlgo)
 	deallocInnEncKey()
 	securemem.ZeroBytes(value) // Zero the passed value
 	if err != nil {return err}
@@ -685,6 +658,7 @@ func (s *Session) Put(epath string, mtime []byte, value []byte) error {
 	var newEntry = &Entry{
 		Path: []byte(epath),
 		Value: chiphertext,
+		Nonce: nonce,
 		MTime: mTimeBytes,
 	}
 
@@ -708,7 +682,7 @@ func (s *Session) Update(epath string, value []byte) error {
 
 	entryMtime := binary.LittleEndian.Uint64(existingEntry.MTime)
 
-	mTime := max(mTimeNow, entryMtime+1) // The current time or old entry mtime+1. Ensures it's always different
+	mTime := max(mTimeNow, entryMtime+1) // The current time or old entry mtime+1.
 
 	var mTimeBytes = make([]byte, 8)
 	binary.LittleEndian.PutUint64(mTimeBytes, uint64(mTime))
@@ -717,14 +691,8 @@ func (s *Session) Update(epath string, value []byte) error {
 	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
-	nonce,err := polysha.HashRaw(
-		polysha.SHAType(s.Header.HashAlgo),
-		append(mTimeBytes, []byte(epath)...),
-	)
-	if err != nil {deallocInnEncKey(); return err}
-
 	// Encrypt the new value with the key
-	_, chiphertext, err := encryptData(value, plainInnEncKey, nonce, s.Header.SEAlgo)
+	newNonce, chiphertext, err := encryptData(value, plainInnEncKey, s.Header.SEAlgo)
 	deallocInnEncKey()
 	securemem.ZeroBytes(value)
 	if err != nil {return err}
@@ -733,6 +701,7 @@ func (s *Session) Update(epath string, value []byte) error {
 	securemem.ZeroBytes(s.EntryMap[epath].Value)
 
 	s.EntryMap[epath].Value = chiphertext
+	s.EntryMap[epath].Nonce = newNonce
 	s.EntryMap[epath].MTime = mTimeBytes
 
 	return nil
@@ -748,9 +717,6 @@ func (s *Session) Rm(key string) error {
 	_,exists := s.EntryMap[key]
 
 	if !exists { return errors.New("key does not exist") }
-
-	// Seatbelt wait for 2 milliseconds to prevent Put > Delete > Put from happening in the same millisecond and making nonce the same.
-	time.Sleep(2*time.Millisecond)
 
 	// Zero the value
 	securemem.ZeroBytes(s.EntryMap[key].Value)
@@ -773,8 +739,6 @@ func (s *Session) Rmd(dirPath string) error {
 
 	folderExists := false
 	
-	time.Sleep(2*time.Millisecond)
-
 	for key := range s.EntryMap {
 		if strings.HasPrefix(key, dirPath) {
 			folderExists = true
@@ -811,15 +775,9 @@ func (s *Session) Mv(oldKey, newKey string) error {
 	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
 
-	nonce,err := polysha.HashRaw(
-		polysha.SHAType(s.Header.HashAlgo),
-		append(entry.MTime, entry.Path...),
-	)
-	if err != nil { deallocInnEncKey(); return err}
-
 	// Decrypt the value with the inner encryption key.
 	// Put needs it in plaintext.
-	value, deallocVal, err := unencryptData(entry.Value, nonce, plainInnEncKey, s.Header.SEAlgo)
+	value, deallocVal, err := unencryptData(entry.Value, entry.Nonce, plainInnEncKey, s.Header.SEAlgo)
 	deallocInnEncKey()
 	if err != nil {return err}
 	defer deallocVal() // Clean even if s.Put() returns without clearing value.
@@ -921,7 +879,7 @@ func (s *Session) Lsall(dirPath string) ([]string, error) {
 // Set an environment variable
 func (s *Session) Senv(name string, value []byte) error {
 
-	nonce, encryptedVal, err := encryptData(value, s.SessionKey, nil, s.Header.SEAlgo)
+	nonce, encryptedVal, err := encryptData(value, s.SessionKey, s.Header.SEAlgo)
 	securemem.ZeroBytes(value)
 	if err != nil { return err }
 
@@ -1030,7 +988,7 @@ func getVaultKeys(
 		if err != nil { return nil, err }
 
 		var key = &Key{}
-		nonce, encryptedKey, err := encryptData(heapHash, sessionKey, nil, seAlgorithm)
+		nonce, encryptedKey, err := encryptData(heapHash, sessionKey, seAlgorithm)
 		securemem.ZeroBytes(heapHash) // Wipe the heap-allocated slice
 
 		if err != nil { securemem.ZeroBytes(heapHash); return nil, err }
@@ -1052,7 +1010,7 @@ func getVaultKeys(
 	return sessionKey,sessKeyDealloc, out, inn, mac, nil
 }
 
-func encryptData(plaintext []byte, enckey []byte, nonce []byte, algorithm uint64) ([]byte, []byte, error) {
+func encryptData(plaintext []byte, enckey []byte, algorithm uint64) ([]byte, []byte, error) {
 	switch algorithm {
 	case Encrypt_AES_CBC_256:
 		// Create AES block cipher
@@ -1067,15 +1025,7 @@ func encryptData(plaintext []byte, enckey []byte, nonce []byte, algorithm uint64
 		}
 
 		var iv_nonce = make([]byte, aes.BlockSize)
-		// Derive the nonce from provided variable or generate a random nonce if it's nil
-		if nonce != nil {
-			if len(nonce) < aes.BlockSize {
-				return nil, nil, errors.New("provided nonce does not satisfy the required size")
-			}
-			iv_nonce = nonce[:aes.BlockSize]
-		} else {
-			if _, err := io.ReadFull(rand.Reader, iv_nonce); err != nil { return nil, nil, err }
-		}
+		if _, err := io.ReadFull(rand.Reader, iv_nonce); err != nil { return nil, nil, err }
 
 		paddedPlaintext := pkcs7Pad(plaintext, block.BlockSize())
 
@@ -1089,14 +1039,7 @@ func encryptData(plaintext []byte, enckey []byte, nonce []byte, algorithm uint64
 
 	case Encrypt_CHACHA20:
 		iv_nonce := make([]byte, chacha20.NonceSizeX) // 24 byte
-		if nonce != nil {
-			if len(nonce) < chacha20.NonceSizeX {
-				return nil, nil, errors.New("provided nonce does not satisfy the required size")
-			}
-			iv_nonce = nonce[:chacha20.NonceSizeX]
-		} else {
-			if _, err := io.ReadFull(rand.Reader, iv_nonce); err != nil { return nil, nil, err }
-		}
+		if _, err := io.ReadFull(rand.Reader, iv_nonce); err != nil { return nil, nil, err }
 
 		cipher, err := chacha20.NewUnauthenticatedCipher(enckey, iv_nonce)
 		if err != nil {
@@ -1116,6 +1059,8 @@ func encryptData(plaintext []byte, enckey []byte, nonce []byte, algorithm uint64
 // unencryptData decrypts the chiphertext using the given nonce, secret and algorithm.
 // It returns the plaintext data and a deallocator to wipe it from memory
 func unencryptData(ciphertext []byte, iv_nonce []byte, enckey []byte, algorithm uint64) ([]byte, func(), error){
+	if len(ciphertext) == 0 { return []byte{}, func(){}, nil }
+
 	switch algorithm {
 	case Encrypt_AES_CBC_256:
 
