@@ -124,7 +124,7 @@ type UnencryptedBody struct {
 type Entry struct {
 	Path []byte `cmpck:"1"` // The front coded path of the entry (decoded in session)
 	Value []byte `cmpck:"2"`  // The value encrypted with inner key
-	Nonce []byte `cmpck:"3"`
+	Nonce []byte `cmpck:"3"` // the nonce used to encrypt the value
 	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
 }
 type Argon2IDParams struct {

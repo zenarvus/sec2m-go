@@ -93,28 +93,28 @@ info: Print info about the version, header and signature of the file
 
 === COMMAND REFERENCE ===
 put <epath> <value>: Inserts a new entry to the vault. Gives error if it already exists.
-- Ingests "<epath>" and/or "<value>" separated by "\n" or asks for user input.
+- Ingests "<epath>" and/or "<value>" via "\n" split stdin or asks for user input.
 
 mput <epath> <mtime> <value>: Inserts an entry and overwrites the existing one if passed unix epoch (<mtime>) is larger.
-- Ingests missing arguments via "\n" split "stdin" or asks for user input.
+- Ingests missing arguments via "\n" split stdin or asks for user input.
 
 update <epath> <value>: Updates an existing vault entry.
-- Ingests missing arguments via "stdin" or asks for user input. Prompts for "(y/n)" confirmation.
+- Ingests missing arguments via "\n" split stdin or asks for user input. Prompts for "(y/n)" confirmation.
 
 get <epath>: Gets the value using entry path.
-- Ingests "<epath>" from "stdin" if missing.
+- Ingests "<epath>" from stdin if missing.
 
 mtime <epath>: Gets the modification time of an entry
-- Ingests "<epath>" from "stdin" if missing.
+- Ingests "<epath>" from stdin if missing.
 
 rm <epath>: Deletes an entry from the vault.
-- Ingests "<epath>" from "stdin" if missing. Prompts for "(y/n)" confirmation.
+- Ingests "<epath>" from stdin if missing. Prompts for "(y/n)" confirmation.
 
 rmd <dpath>: Deletes a directory from the vault.
-- Ingests "<dpath>" from "stdin" if missing. Prompts for "(y/n)" confirmation.
+- Ingests "<dpath>" from stdin if missing. Prompts for "(y/n)" confirmation.
 
 mv <oldpath> <newpath>: Renames a vault entry.
-- Ingests missing arguments via "stdin".
+- Ingests missing arguments via "\n" split stdin.
 
 ==========
 
@@ -122,10 +122,10 @@ exec [args]: Executes a system binary.
 - Forwards incoming stdin to external command stdin.
 
 eval <pipeline>: Runs given command pipeline.
-- Ingests command string from "stdin" if missing.
+- Ingests command string from stdin if missing.
 
 iter <pipeline>: Splits the provided stdin by newlines and iterates through them.
-- Runs "<pipeline>" repeatedly, passing each line as "stdin".
+- Runs "<pipeline>" repeatedly, passing each line as stdin.
 
 ==========
 
@@ -141,13 +141,13 @@ lsall <dpath>: Lists all the keys in the given dir and in all of it's subdirs
 ==========
 
 senv <name> <value>: Sets an environment variable in the shell session.
-- Ingests "<name>" and "<value>" from "stdin" if missing.
+- Ingests "<name>" and "<value>" from "\n" split stdin if missing.
 
 genv <name>: Get an environment variable from the session
-- Ingests "<name>" from "stdin" if missing.
+- Ingests "<name>" from stdin if missing.
 
 renv <name>: Wipe an environment variable from the memory securely
-- Ingests "<name>" from "stdin" if missing.
+- Ingests "<name>" from stdin if missing.
 
 === PIPING COMMANDS ===
 Commands can be chained using the pipe operator ("|"). Output from the left command is passed directly as standard input to the right command.
@@ -229,6 +229,7 @@ type UnencryptedBody struct {
 type Entry struct {
 	Path []byte `cmpck:"1"` // The front coded path of the entry (decoded in session)
 	Value []byte `cmpck:"2"`  // The value encrypted with inner key
+	Nonce []byte `cmpck:"3"` // the nonce used to encrypt the value
 	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
 }
 type Argon2IDParams struct {
