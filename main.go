@@ -533,7 +533,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			dirs, entries, err = sess.Ls(string(args[1]))
 			if err != nil { return nil,func(){}, err }
 
-		} else { return nil,func(){}, errors.New("Invalid arguments. Usage: ls <dpath>") }
+		} else { return nil,func(){}, errors.New("Usage: ls <dpath>") }
 
 		// Sort the dirs slice
 		sort.Slice(dirs, func(i, j int) bool {
@@ -569,7 +569,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			entries, err = sess.Lsall(string(args[1]))
 			if err != nil { return nil,func(){}, err }
 
-		} else { return nil,func(){}, errors.New("Invalid arguments. Usage: lsall <dpath>") }
+		} else { return nil,func(){}, errors.New("Usage: lsall <dpath>") }
 
 		// Sort the entries slice
 		sort.Slice(entries, func(i, j int) bool {
@@ -594,12 +594,12 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			err := sess.Cd(string(args[1]))
 			if err != nil { return nil,func(){}, err }
 
-		} else { return nil, func(){}, errors.New("Invalid arguments. Usage: cd <dpath>") }
+		} else { return nil, func(){}, errors.New("Usage: cd <dpath>") }
 
 		return nil, func(){}, nil
 
 	case "exec":
-		if len(args) < 2 { return nil, func(){}, errors.New("Invalid arguments. Usage: exec <shell-command> <args>") }
+		if len(args) < 2 { return nil, func(){}, errors.New("Usage: exec <shell-command> <args>") }
 
 		// Create the command
 		cmdArgs := make([]string, 0, len(args[1:]))
@@ -641,7 +641,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 	// Read the stdin, split it with the given delimiter, iterate through them and execute the provided command in every iteration
 	case "iter":
-		if len(args) != 2 { return nil,func(){}, errors.New("Invalid aruments. Usage: iter <pipeline>")}
+		if len(args) != 2 { return nil,func(){}, errors.New("Usage: iter <pipeline>")}
 		
 		lines := bytes.Split(pipeStdin, []byte{'\n'})
 

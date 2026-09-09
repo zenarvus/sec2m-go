@@ -20,11 +20,11 @@
 
 **>** Additional per-value encryption for in-memory security
 
-**>** Per-Session-Key to store encryption and signature keys securely on memory
+**>** Per-Session-Key to store encryption and signature keys encrypted on memory
 
 **>** Core-dumping prevention and memory locking for the session key on supported platforms (android & linux)
 
-**>** Explicit secret zeroing and deallocation after usage (not when passed as literal positional arguments)
+**>** Secret zeroing and deallocation after usage (not when passed as literal positional arguments)
 
 **>** Extensible `[POSIX Portable Filepath] -> [Binary Value]` array structure. Like UNIX, everything is an entry
 
@@ -52,10 +52,10 @@ Improve CLI side, move parser logic to an another file and write a test file for
 ```
 Usage: VAULT=/path/to/file.sdb sec2m <command> [args]
 
-The binary requires VAULT environment variable pointing to a .sdb file.
+The binary requires VAULT environment variable pointing to a .sdb file. The file can be maximum 1GiB
 
-"=== VAULT COMMANDS ==="
-init <dalg> <ealg> <halg>: Init the vault file in VAULT location. Gives error if it already exists.
+=== VAULT  ===
+init <dalg> <ealg> <halg>: Inits the vault file in VAULT location. Gives error if it already exists.
 
 change <dalg> <ealg> <halg>: Updates the vault algorithms and password in VAULT location. Will ask for the old password one time and the new one for two times.
 
@@ -63,9 +63,9 @@ change <dalg> <ealg> <halg>: Updates the vault algorithms and password in VAULT 
 Key Derivation (<dalg>):
 	- argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters.
 		- <slen>: Length of the salt (Recommended: 16)
-		- <iter>: The amount of iterations (Recommended: 4)
-		- <mem>: Required memory in megabytes (Recommended: 256)
-		- <thread>: Amount of threads used (Recommended: 2)
+		- <iter>: The amount of iterations (Recommended: 4, Max: 16)
+		- <mem>: Required memory in megabytes (Recommended: 256, Max: 2048)
+		- <thread>: Amount of threads used (Recommended: 2, Max: 32)
 
 Symmetric Encryption (<ealg>):
 	- aes-cbc-256: AES-256 with CBC mode
@@ -127,13 +127,13 @@ iter <pipeline>: Splits the provided stdin by newlines and iterates through them
 
 ==========
 
-ls <dpath>: Print the items in the given path in vault
+ls <dpath>: Prints the items in the given path in vault
 - Prints items in the current directory if <dpath> is missing.
 
-cd <dpath>: Change the current directory to the given path in vault
+cd <dpath>: Changes the current directory to the given path in vault
 - Changes the directory to root if <dpath> is missing.
 
-lsall <dpath>: List all the keys in the given dir and in all of it's subdirs
+lsall <dpath>: Lists all the keys in the given dir and in all of it's subdirs
 - Prints items in the current directory and it's sub-directories if <dpath> is missing.
 
 ==========
@@ -168,9 +168,9 @@ To define a shortcut named "cget" that copies the secret to the clipboard, creat
 ```
 
 ## Import & Export
-It's convenient to use a flat list of `[entry path] [base64 encoded value] [modification time]` separated with `\n` on imports and exports. So `migration.sh` folder contains helper scripts using this format. (requires base64 binary)
+It's convenient to use a list of `[entry path] [base64 encoded value] [modification time]` separated with `\n` on imports and exports. We call this format "flat list." `migration.sh` folder contains helper scripts to process flat lists. (requires base64 binary)
 
-To export everything in this flat list format, use the following command in shell:
+To export everything in a flat list, use the following command in shell:
 
 `lsall / | iter "senv EXP | genv EXP | get | exec /path/to/exporter.sh $(genv EXP) $(genv EXP | mtime)"`
 
@@ -181,7 +181,7 @@ To export everything in this flat list format, use the following command in shel
 - `get`: Gets the entry value from the path provided from pipe
 - `exec /path/to/exporter.sh $(genv EXP) $(genv EXP | mtime)"`: Executes exporter.sh with stdin from get and path and modification time as arguments
 
-To import everything from it, use the following command in shell:
+To import everything from flat list, use the following command in shell:
 
 `exec cat /path/to/sec2m.export | iter "exec /path/to/importer.sh | mput"`
 
@@ -191,13 +191,17 @@ To import everything from it, use the following command in shell:
 - `mput` Puts the value to the vault according to given arguments
 
 ## Migrating From KeePass*
-`migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to the flat list. Then, you can use the command above to import it.
-- Note: It's actually a go code wrapped in a shell script. Make sure you installed go.
+`migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to a flat list. Then, you can use the command above to import it.
+
+> [!NOTE]
+> It's actually a go code wrapped in a shell script. Make sure you installed go.
 
 ## Dos and Nos
-**NEVER** pass an entry value to an external script as positional arguments! Always pass it via stdin instead. Positional arguments will be visible to other processes and will leak your secrets.
+> [!CAUTION]
+> **NEVER** pass an entry value to an external script as positional arguments! Always pass it via stdin instead. Positional arguments will be visible to other processes and will leak your secrets.
 
-Positional arguments passed to internal commands will be hidden to other processes. Meaning, you can pass entry values to them relatively securely, but they will be visible in session history. Try to prefer providing them as stdin or via provided input request.
+> [!NOTE]
+> Positional arguments passed to internal commands in shell session will be hidden to other processes. Meaning, you can pass entry values to them relatively securely, but they will be visible in session history. Try to prefer providing them as stdin or via provided input request.
 
 ## SDB Format
 ```go
@@ -223,12 +227,12 @@ type UnencryptedBody struct {
 type Entry struct {
 	Path []byte `cmpck:"1"` // The front coded path of the entry (decoded in session)
 	Value []byte `cmpck:"2"`  // The value encrypted with inner key
-	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian]). It MUST be always larger than the previous MTime value of the entry
+	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
 }
 type Argon2IDParams struct {
-	Iterations uint32 `cmpck:"1"` // Iterations
-	Memory uint32 `cmpc:"2"` // Required memory in megabytes
-	Threads uint32 `cmpck:"3"` // Parallel threads used while deriving keys
+	Iterations uint32 `cmpck:"1"` // Iterations. Max:16
+	Memory uint32 `cmpck:"2"` // Required memory in megabytes. Max:2048
+	Threads uint32 `cmpck:"3"` // Parallel threads used while deriving keys. Max:32
 }
 ```
 
@@ -249,7 +253,7 @@ Password: The input user writes in
 Salt: A random set of bytes created on vault initialization. It's permanent per vault. Guarantees that the derived key is completely unique per vault, even if two vaults use the identical password.
 
 Nonce(): A random set of bytes. Generated uniquely from scratch for every single encryption operation. Ensures that saving the vault generates unique ciphertext every time, even if the data inside hasn't changed.
-FieldNonce(): HashAlgorithm(MTime || EntryPath).NonceSize() Deterministic nonce is used instead of a random generated one to optimize file size by eliminating a separate nonce field. It provides guarantineed uniqueness as mtime difference is enforced by the library on each update.
+FieldNonce(): HashAlgorithm(MTime || EntryPath).NonceSize() Deterministic nonce is used instead of a random generated one to optimize file size by eliminating a separate nonce field. (Mtime || EntryPath) combination MUST be unique for every entry.
 
 DerivedKey = KeyDerivationAlgorithm(password, salt)
 

@@ -112,12 +112,14 @@ type Entry struct {
 	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
 }
 type Argon2IDParams struct {
-	Iterations uint32 `cmpck:"1"` // Iterations
-	Memory uint32 `cmpck:"2"` // Required memory in megabytes
-	Threads uint32 `cmpck:"3"` // Parallel threads used while deriving keys
+	Iterations uint32 `cmpck:"1"` // Iterations. Max:16
+	Memory uint32 `cmpck:"2"` // Required memory in megabytes. Max:2048
+	Threads uint32 `cmpck:"3"` // Parallel threads used while deriving keys. Max:32
 }
 
 ///////////////////////////////////////////////
+
+const MAX_FILE_SIZE = 1024*1024*1024*1 // 1GiB
 
 type Env struct {
 	EncryptedValue []byte // Encrypted value with the session key
@@ -245,12 +247,19 @@ func InitSession(
 func LoadSession(filepath string, password []byte) (*Session, error) {
 
 	// Try to create a lock file. Exit if it exists or gives an another error.
-	file, err := os.OpenFile(filepath+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	lockfile, err := os.OpenFile(filepath+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		if os.IsExist(err) { return nil, errors.New("a lock file for this vault already exists") }
 		return nil, err
 	}
-	file.Close()
+	lockfile.Close()
+
+	vaultfile, err := os.Stat(filepath)
+	if err != nil {return nil, err}
+
+	if vaultfile.Size() > MAX_FILE_SIZE {
+		return nil, errors.New("the vault file exceeds the maximum allowed size")
+	}
 
 	var sess = &Session{
 		EntryMap: make(map[string]*Entry),
@@ -273,7 +282,8 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	sess.Version = fileStruct.Version
 	sess.Signature = fileStruct.Signature
 
-	err = cmpck.Unmarshal(fileStruct.Header, &sess.Header) // Copy the metadata of the file to the session.
+	// Copy the header of the file to the session.
+	err = cmpck.Unmarshal(fileStruct.Header, &sess.Header)
 	if err != nil {return nil, err}
 
 	// Derive the encryption key using header parameters.
@@ -719,8 +729,8 @@ func (s *Session) Rm(key string) error {
 
 	if !exists { return errors.New("key does not exist") }
 
-	// Wait for 1 millisecond to prevent Put > Delete > Put from happening in the same millisecond, making nonce the same
-	time.Sleep(1*time.Millisecond)
+	// Seatbelt wait for 2 milliseconds to prevent Put > Delete > Put from happening in the same millisecond and making nonce the same.
+	time.Sleep(2*time.Millisecond)
 
 	// Zero the value
 	securemem.ZeroBytes(s.EntryMap[key].Value)
@@ -742,12 +752,12 @@ func (s *Session) Rmd(dirPath string) error {
 	if !strings.HasSuffix(dirPath, "/") { dirPath = dirPath+"/" }
 
 	folderExists := false
+	
+	time.Sleep(2*time.Millisecond)
 
 	for key := range s.EntryMap {
 		if strings.HasPrefix(key, dirPath) {
 			folderExists = true
-
-			time.Sleep(1*time.Millisecond)
 			
 			securemem.ZeroBytes(s.EntryMap[key].Value)
 			delete(s.EntryMap, key)
@@ -934,6 +944,16 @@ func deriveKey(
 		var argon2idParams Argon2IDParams
 		err := cmpck.Unmarshal(params, &argon2idParams)
 		if err != nil {return nil,func(){}, err}
+
+		if argon2idParams.Iterations > 16 {
+			return nil, nil, errors.New("argon2id iterations exceed the maximum allowed size (16)")
+		}
+		if argon2idParams.Memory > 2048 {
+			return nil, nil, errors.New("argon2id memory exceed the maximum allowed size (2048)")
+		}
+		if argon2idParams.Threads > 32 {
+			return nil, nil, errors.New("argon2id threads exceed the maximum allowed size (32)")
+		}
 
 		// generate the key on go heap which is handled by go runtime (we do not want that)
 		heapKey := argon2.IDKey(

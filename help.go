@@ -28,9 +28,9 @@ import (
 func printMainHelp() {
 fmt.Printf(`Usage: VAULT=/path/to/file.sdb sec2m <command> [args]
 
-The binary requires VAULT environment variable pointing to a .sdb file.
+The binary requires VAULT environment variable pointing to a .sdb file. The file can be maximum 1GiB
 
-"=== VAULT COMMANDS ==="
+=== VAULT  ===
 init <dalg> <ealg> <halg>: Inits the vault file in VAULT location. Gives error if it already exists.
 
 change <dalg> <ealg> <halg>: Updates the vault algorithms and password in VAULT location. Will ask for the old password one time and the new one for two times.
@@ -39,9 +39,9 @@ change <dalg> <ealg> <halg>: Updates the vault algorithms and password in VAULT 
 Key Derivation (<dalg>):
 	- argon2id-<slen>-<iter>-<mem>-<thread>: Argon2ID with given parameters.
 		- <slen>: Length of the salt (Recommended: 16)
-		- <iter>: The amount of iterations (Recommended: 4)
-		- <mem>: Required memory in megabytes (Recommended: 256)
-		- <thread>: Amount of threads used (Recommended: 2)
+		- <iter>: The amount of iterations (Recommended: 4, Max: 16)
+		- <mem>: Required memory in megabytes (Recommended: 256, Max: 2048)
+		- <thread>: Amount of threads used (Recommended: 2, Max: 32)
 
 Symmetric Encryption (<ealg>):
 	- aes-cbc-256: AES-256 with CBC mode
@@ -161,16 +161,18 @@ func printVaultInfo(file *core.File, header *core.UnmarshaledHeader) {
 	fmt.Println("=== FILE INFO ===")
 	fmt.Println("Vault-Version:", file.Version)
 	fmt.Println("Key-Derivation-Algorithm:", header.KDAlgo)
+	fmt.Printf("Key-Derivation-Salt: %x\n", header.KDSalt)
 
 	switch header.KDAlgo {
 	case core.Derive_ARGON2ID:
 		var argon2idParams core.Argon2IDParams
 		_ = cmpck.Unmarshal(header.KDParams, &argon2idParams)
-		fmt.Println("Argon2ID-Iterations:", argon2idParams.Iterations)
-		fmt.Println("Argon2ID-Memory:", argon2idParams.Memory)
-		fmt.Println("Argon2ID-Parallelism:", argon2idParams.Threads)
+		fmt.Println("Argon2ID-Params")
+		fmt.Println("- Iterations:", argon2idParams.Iterations)
+		fmt.Println("- Memory:", argon2idParams.Memory)
+		fmt.Println("- Parallelism:", argon2idParams.Threads)
 	}
-	fmt.Printf("Key-Derivation-Salt: %x\n", header.KDSalt)
+
 	fmt.Println("Encryption-Algorithm:", header.SEAlgo)
 	fmt.Printf("Encryption-Nonce: %x\n", header.SENonce)
 	fmt.Println("Hash-Algorithm:", header.HashAlgo)
