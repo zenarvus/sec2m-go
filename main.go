@@ -25,11 +25,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/chzyer/readline"
 	cmpck "github.com/zenarvus/compack/go"
@@ -71,10 +73,10 @@ func main() {
 
 		vaultPath := getVaultPath()
 
-		pw := getPassword("Set vault password: ")
+		pw := getPassword(nil, "Set vault password: ")
 		defer securemem.ZeroBytes(pw)
 
-		pwAgain := getPassword("Repeat password: ")
+		pwAgain := getPassword(nil, "Repeat password: ")
 		defer securemem.ZeroBytes(pwAgain)
 
 		if !bytes.Equal(pw, pwAgain) {
@@ -99,13 +101,13 @@ func main() {
 			os.Exit(1)
 		}
 
-		oldpw := getPassword("Old password: ")
+		oldpw := getPassword(nil, "Old password: ")
 		defer securemem.ZeroBytes(oldpw)
 
-		newpw := getPassword("New password: ")
+		newpw := getPassword(nil, "New password: ")
 		defer securemem.ZeroBytes(newpw)
 
-		newpwagain := getPassword("Retype password: ")
+		newpwagain := getPassword(nil, "Retype password: ")
 		defer securemem.ZeroBytes(newpwagain)
 
 		if !bytes.Equal(newpw, newpwagain) {
@@ -133,7 +135,7 @@ func main() {
 	case "shell":
 		vaultPath := getVaultPath()
 
-		pw := getPassword("Vault password: ")
+		pw := getPassword(nil, "Vault password: ")
 		defer securemem.ZeroBytes(pw)
 
 		sess, err := core.LoadSession(vaultPath, pw)
@@ -151,7 +153,7 @@ func main() {
 	case "shot":
 		vaultPath := getVaultPath()
 
-		pw := getPassword("Vault password: ")
+		pw := getPassword(nil, "Vault password: ")
 		defer securemem.ZeroBytes(pw)
 
 		sess, err := core.LoadSession(vaultPath, pw)
@@ -339,7 +341,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	if sess == nil {
 		isOneshot = true
 
-		passwd := getPassword("Vault password: ")
+		passwd := getPassword(sess, "Vault password: ")
 		defer securemem.ZeroBytes(passwd)
 
 		vaultPath := getVaultPath()
@@ -363,7 +365,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	switch string(args[0]) {
 	case "put": // Add an entry with the value
 
-		putArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, true)
+		putArgs, err := getArgsFromArgsNStdin(sess, 2, args[1:], pipeStdin, true)
 		if err != nil {
 			return nil, func(){}, errors.New("Usage: put <epath> <value>\n"+err.Error())
 		}
@@ -376,7 +378,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	
 	case "mput":
 
-		mputArgs, err := getArgsFromArgsNStdin(3, args[1:], pipeStdin, true)
+		mputArgs, err := getArgsFromArgsNStdin(sess, 3, args[1:], pipeStdin, true)
 		if err != nil {
 			return []byte{},func(){}, errors.New("Usage: put <epath> <mtime> <value>\n"+err.Error())
 		}
@@ -398,7 +400,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return []byte("inserted: "+string(epath)+"\n"),func(){}, nil
 
 	case "update":
-		updateArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, true)
+		updateArgs, err := getArgsFromArgsNStdin(sess, 2, args[1:], pipeStdin, true)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: update <epath> <value>\n"+err.Error())
 		}
@@ -407,7 +409,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		var value = updateArgs[1]
 
 		fmt.Println("confirm the update attempt:",string(epath))
-		input := getPassword("(y/n): ")
+		input := getPassword(sess, "(y/n): ")
 
 		if string(input) == "y" {
 			err := sess.Update(string(epath), value)
@@ -420,7 +422,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	
 	case "mtime":
 
-		mtimeArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
+		mtimeArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: mtime <epath>\n"+err.Error())
 		}
@@ -442,7 +444,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return fmt.Appendf(nil, "%v", mtimeInt),func(){}, nil
 		
 	case "get": // Get an entry's value
-		getArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
+		getArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: get <epath>\n"+err.Error())
 		}
@@ -454,7 +456,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return val,deallocVal, nil
 
 	case "mv":
-		mvArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, false)
+		mvArgs, err := getArgsFromArgsNStdin(sess, 2, args[1:], pipeStdin, false)
 		if err != nil {
 			return nil,func(){},errors.New("Usage: mv <old> <new>\n"+err.Error())
 		}
@@ -473,7 +475,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return []byte("Key moved to the new destination\n"),func(){}, nil
 
 	case "rm": // Remove a single entry
-		rmArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
+		rmArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: rm <epath>\n"+err.Error())
 		}
@@ -481,7 +483,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		var epath = string(rmArgs[0])
 
 		fmt.Println("confirm the deletion attempt:",epath)
-		input := getPassword("(y/n): ")
+		input := getPassword(sess, "(y/n): ")
 
 		if string(input) == "y" {
 			err := sess.Rm(string(epath))
@@ -498,13 +500,13 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 		
 	case "rmd": // Remove a directory
-		rmdArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
+		rmdArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
 		if err != nil { return nil,func(){}, errors.New("Usage: rmd <dpath>\n"+err.Error()) }
 
 		var dpath = string(rmdArgs[0])
 
 		fmt.Println("confirm the deletion attempt:",dpath)
-		input := getPassword("(y/n): ")
+		input := getPassword(sess, "(y/n): ")
 
 		if string(input) == "y" {
 			err := sess.Rmd(dpath)
@@ -630,7 +632,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return outBuf.Bytes(),func(){}, nil
 
 	case "eval":
-		evalArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
+		evalArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
 		if err != nil { return nil,func(){}, errors.New("Usage: eval <pipeline>\n"+err.Error()) }
 
 		var cmd = evalArgs[0]
@@ -663,7 +665,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return finalResult,deallocateFn, nil
 	
 	case "senv":
-		senvArgs, err := getArgsFromArgsNStdin(2, args[1:], pipeStdin, false)
+		senvArgs, err := getArgsFromArgsNStdin(sess, 2, args[1:], pipeStdin, false)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: senv <name> <value>\n"+err.Error())
 		}
@@ -674,7 +676,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return nil,func(){}, nil
 
 	case "genv":
-		genvArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
+		genvArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
 		if err != nil { return nil,func(){}, errors.New("Usage: genv <name>\n"+err.Error()) }
 
 		val,dealloc,err := sess.Genv(string(genvArgs[0]))
@@ -683,7 +685,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return val, dealloc, nil
 
 	case "renv":
-		renvArgs, err := getArgsFromArgsNStdin(1, args[1:], pipeStdin, false)
+		renvArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
 		if err != nil { return nil,func(){}, errors.New("Usage: renv <name>\n"+err.Error()) }
 
 		sess.Renv(string(renvArgs[0]))
@@ -752,13 +754,32 @@ func getVaultPath() string {
 }
 
 // getPassword prompts user to give an input. The written text will not shown.
-func getPassword(prompt string) []byte {
+func getPassword(sess *core.Session, prompt string) []byte {
 
 	fmt.Fprintf(os.Stderr, "%s", prompt)
+
+	// Get the old terminal state
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.GetState(fd)
+	if err != nil {
+		fmt.Println("\nError reading state:", err)
+		if sess != nil { sess.Destroy() }
+		os.Exit(1)
+	}
+	// Catch the interrupt signal and safely restore echo
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		term.Restore(fd, oldState)
+		if sess != nil { sess.Destroy() }
+		os.Exit(1)
+	}()
 
 	input, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
 		fmt.Println("\nError reading input:", err)
+		if sess != nil { sess.Destroy() }
 		os.Exit(1)
 	}
 
@@ -768,7 +789,9 @@ func getPassword(prompt string) []byte {
 
 // get the arguments from passed arguments and stdin. Give error if it's not enough to create args in requiredCount.
 // Ask for user input if given arguments does not match the required count and ask is true
-func getArgsFromArgsNStdin(requiredCount int, givenargs [][]byte, stdin []byte, ask bool) (totalargs [][]byte, err error) {
+func getArgsFromArgsNStdin(
+	sess *core.Session, requiredCount int, givenargs [][]byte, stdin []byte, ask bool,
+) (totalargs [][]byte, err error) {
 
 	for _,arg := range givenargs {
 		totalargs = append(totalargs, arg)
@@ -817,7 +840,7 @@ func getArgsFromArgsNStdin(requiredCount int, givenargs [][]byte, stdin []byte, 
 	if ask && requiredCount-len(totalargs) > 0 {
 		// Get argument until requiredCount gets equal to len(totalargs)
 		for requiredCount-len(totalargs) > 0 {
-			arg := getPassword(fmt.Sprintf("%vth arg:", len(totalargs)))
+			arg := getPassword(sess, fmt.Sprintf("Arg-%v:", len(totalargs)))
 			totalargs = append(totalargs, arg)
 		}
 	}

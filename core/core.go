@@ -196,7 +196,10 @@ func InitSession(
 	file.Close()
 
 	kdAlgo, salt, kdParams, err := getKeyDerivationParams(kdAlgoStr)
-	if err != nil {return nil, err}
+	if err != nil {
+		os.Remove(filepath+".lock")
+		return nil, err
+	}
 
 	seAlgo := algoStrToNumMap[seAlgoStr]
 	hashAlgo := algoStrToNumMap[hashAlgoStr]
@@ -219,13 +222,13 @@ func InitSession(
 	}
 
 	derivedKey,deallocDerivedKey, err := deriveKey(password, salt, sess.Header.KDAlgo, sess.Header.SEAlgo, sess.Header.KDParams)
-	if err != nil { return nil, err }
+	if err != nil { sess.Destroy(); return nil, err }
 
 	sessionKey, sessionKeyDealloc, outenckey, innenckey, mackey, err := getVaultKeys(
 		derivedKey, polysha.SHAType(sess.Header.HashAlgo), sess.Header.SEAlgo,
 	)
 	deallocDerivedKey() // We do not need the derived key anymore
-	if err != nil { return nil, err }
+	if err != nil { sess.Destroy(); return nil, err }
 
 	sess.SessionKey = sessionKey
 	sess.SessKeyDealloc = sessionKeyDealloc
@@ -255,9 +258,10 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	lockfile.Close()
 
 	vaultfile, err := os.Stat(filepath)
-	if err != nil {return nil, err}
+	if err != nil { os.Remove(filepath+".lock"); return nil, err}
 
 	if vaultfile.Size() > MAX_FILE_SIZE {
+		os.Remove(filepath+".lock")
 		return nil, errors.New("the vault file exceeds the maximum allowed size")
 	}
 
@@ -269,13 +273,14 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	sess.Filepath = filepath
 
 	fileBytes, err := os.ReadFile(sess.Filepath)
-	if err!=nil {return nil, err}
+	if err!=nil { sess.Destroy(); return nil, err}
 
 	var fileStruct File
 	err = cmpck.Unmarshal(fileBytes, &fileStruct)
-	if err != nil {return nil, err}
+	if err != nil { sess.Destroy(); return nil, err}
 
 	if fileStruct.Version != 1 {
+		sess.Destroy()
 		return nil, errors.New("unsupported vault version")
 	}
 
@@ -284,7 +289,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 
 	// Copy the header of the file to the session.
 	err = cmpck.Unmarshal(fileStruct.Header, &sess.Header)
-	if err != nil {return nil, err}
+	if err != nil { sess.Destroy(); return nil, err}
 
 	// Derive the encryption key using header parameters.
 	derivedKey, deallocDerivedKey, err := deriveKey(
@@ -292,14 +297,14 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 		sess.Header.KDAlgo, sess.Header.SEAlgo,
 		sess.Header.KDParams,
 	)
-	if err != nil {return nil, err} 
+	if err != nil { sess.Destroy(); return nil, err} 
 
 	// Get vault keys from the derived key
 	sessionKey, deallocSessionKey, outenckey, innenckey, mackey, err := getVaultKeys(
 		derivedKey, polysha.SHAType(sess.Header.HashAlgo), sess.Header.SEAlgo,
 	)
 	deallocDerivedKey() // Wipe derivedKey from memory. We do not need it anymore.
-	if err != nil { return nil, err } // After getting keys is successful, we should destroy the session in any error to remove them from memory.
+	if err != nil { sess.Destroy(); return nil, err } // After getting keys is successful, we should destroy the session in any error to remove them from memory.
 
 	sess.SessionKey = sessionKey // Save the session key
 	sess.SessKeyDealloc = deallocSessionKey
@@ -345,7 +350,7 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 	var prev string
 	for _,entry := range unencryptedBody.Entries {
 		decoded, err := frontDecode(prev, entry.Path)
-		if err != nil {return nil, err}
+		if err != nil { sess.Destroy(); return nil, err}
 		prev = decoded
 		entry.Path = []byte(decoded)
 		sess.EntryMap[decoded] = &entry

@@ -26,7 +26,7 @@
 
 **>** Secret zeroing and deallocation after usage (not when passed as literal positional arguments)
 
-**>** Extensible `[POSIX Portable Filepath] -> [Binary Value]` array structure. Like UNIX, everything is an entry
+**>** Extensible `[POSIX Portable Filepath] => [Binary Value]` array structure. Like UNIX, everything is an entry
 
 **>** Shell like directory navigation using `cd`, `ls` and `lsall`
 
@@ -46,7 +46,9 @@ git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build .
 Now you are ready to go!
 
 ## Roadmap
-Improve CLI side, move parser logic to an another file and write a test file for the parser.
+Improve CLI side and command substitution handling, move parser logic to an another file and write a test file for the parser.
+
+Consider migrating to <https://github.com/reeflective/readline> or <https://github.com/c-bata/go-prompt>?
 
 ## Help
 ```
