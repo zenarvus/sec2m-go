@@ -36,6 +36,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -259,6 +260,8 @@ func InitSession(
 		return nil, err
 	}
 
+	runtime.GC() // run garbage collection manually to clear things up
+
 	return sess, nil
 }
 
@@ -373,6 +376,8 @@ func LoadSession(filepath string, password []byte) (*Session, error) {
 		
 	}
 
+	runtime.GC() // run garbage collection manually to clear things up
+
 	return sess, nil
 }
 
@@ -479,6 +484,8 @@ func (s *Session) VaultChange(
 	// Save the session to the file with updated parameters
 	err = s.Save()
 	if err != nil {return err}
+
+	runtime.GC() // run garbage collection manually to clear things up
 
 	return nil
 }

@@ -1,5 +1,8 @@
 #!/bin/sh
 
+set +x # disable command tracing/debugging
+ulimit -c 0 # disable core dumping
+
 # Read all incoming data from stdin into a variable
 data=$(cat)
 

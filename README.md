@@ -22,9 +22,9 @@
 
 **>** Per-Session-Key to store encryption and signature keys encrypted on memory
 
-**>** Core-dumping prevention and memory locking for the session key on supported platforms (android & linux)
+**>** Core-dumping prevention (android & linux) and memory locking for the session key (windows, darwin, linux & android) on supported platforms
 
-**>** Secret zeroing and deallocation after usage (not when passed as literal positional arguments)
+**>** Secret zeroing and deallocation after usage whenever possible
 
 **>** Extensible `[POSIX Portable Filepath] => [Binary Value]` array structure. Like UNIX, everything is an entry
 
@@ -240,7 +240,7 @@ type Argon2IDParams struct {
 ```
 
 ## Comparison With KDBX
-SDB stays small by using an optimized format: binary encoding for the file and front coding for the paths, making using extra compression algorithms redundant. Whereas, KDBX(4.1) uses XML for the body and needs daddy gzip to reduce it's needy file size.
+SDB stays small by using an optimized format: binary encoding for the file and front coding for the paths, making using extra compression algorithms unneeded. Whereas, KDBX(4.1) uses XML for the body and needs daddy gzip to reduce it's needy file size.
 
 SDB's file structure is simpler and easier to implement from scratch. See: <https://keepass.info/help/download/KDBX_XML.xsd> and [SDB Format Section](#sdb-format).
 
