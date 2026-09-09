@@ -802,6 +802,11 @@ func (s *Session) Mv(oldKey, newKey string) error {
 
 	if !exists { return errors.New("key does not exist") }
 
+	// Give error if target already exists. They will need to remove it first.
+	// This prevents nonce reuse on put A, put B (same millisecond) and mv A => B
+	_,targetExists :=  s.EntryMap[newKey]
+	if targetExists { return errors.New("target already exists") }
+
 	// Decrypt the inner encryption key
 	plainInnEncKey, deallocInnEncKey, err := s.InnEncKey.Get(s.SessionKey, s.Header.SEAlgo)
 	if err != nil {return err}
