@@ -160,7 +160,7 @@ To define a shortcut named "cget" that copies the secret to the clipboard, creat
 func printVaultInfo(file *core.File, header *core.UnmarshaledHeader) {
 	fmt.Println("=== FILE INFO ===")
 	fmt.Println("Vault-Version:", file.Version)
-	fmt.Println("Key-Derivation-Algorithm:", header.KDAlgo)
+	fmt.Println("Key-Derivation-Algorithm:", core.DerAlgoToStrMap[header.KDAlgo])
 	fmt.Printf("Key-Derivation-Salt: %x\n", header.KDSalt)
 
 	switch header.KDAlgo {
@@ -173,9 +173,9 @@ func printVaultInfo(file *core.File, header *core.UnmarshaledHeader) {
 		fmt.Println("- Parallelism:", argon2idParams.Threads)
 	}
 
-	fmt.Println("Encryption-Algorithm:", header.SEAlgo)
+	fmt.Println("Encryption-Algorithm:", core.EncAlgoToStrMap[header.SEAlgo])
 	fmt.Printf("Encryption-Nonce: %x\n", header.SENonce)
-	fmt.Println("Hash-Algorithm:", header.HashAlgo)
+	fmt.Println("Hash-Algorithm:", core.HashAlgoToStrMap[header.HashAlgo])
 	fmt.Printf("Signature: %x\n", file.Signature)
 }
 

@@ -85,6 +85,21 @@ var encAlgoToKeylen = map[uint64]int{
 	Encrypt_AES_CBC_256: 32,
 }
 
+var DerAlgoToStrMap = map[uint64]string{
+	Derive_ARGON2ID: "argon2id",
+}
+var EncAlgoToStrMap = map[uint64]string{
+	Encrypt_AES_CBC_256: "aes-cbc-256",
+	Encrypt_CHACHA20: "xchacha20",
+}
+var HashAlgoToStrMap = map[uint64]string{
+	uint64(Hash_SHA2_256): "sha2-256",
+	uint64(Hash_SHA3_256): "sha3-256",
+	uint64(Hash_SHA3_384): "sha3-384",
+	uint64(Hash_SHA3_512): "sha3-512",
+	uint64(Hash_Blake3): "blake3-256",
+}
+
 /////////////////////////////////////////////
 
 type File struct {
