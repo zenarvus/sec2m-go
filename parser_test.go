@@ -23,7 +23,7 @@ import (
 	"testing"
 )
 
-type ExpectedToken struct {
+type expectedToken struct {
 	Type  TokenType
 	Value string
 }
@@ -31,12 +31,12 @@ type ExpectedToken struct {
 func TestTokenize(t *testing.T) {
 	tests := []struct {
 		input       string
-		expected    []ExpectedToken
+		expected    []expectedToken
 		expectError bool
 	}{
 		{
 			input: "cmd arg1 arg2",
-			expected: []ExpectedToken{
+			expected: []expectedToken{
 				{Type: ARG, Value: "cmd"},
 				{Type: ARG, Value: "arg1"},
 				{Type: ARG, Value: "arg2"},
@@ -44,14 +44,14 @@ func TestTokenize(t *testing.T) {
 		},
 		{
 			input: "escaped\\ space new\\nline",
-			expected: []ExpectedToken{
+			expected: []expectedToken{
 				{Type: ARG, Value: "escaped space"},
 				{Type: ARG, Value: "new\nline"},
 			},
 		},
 		{
 			input: "cmd \"double quote\" 'single quote'",
-			expected: []ExpectedToken{
+			expected: []expectedToken{
 				{Type: ARG, Value: "cmd"},
 				{Type: ARG, Value: "double quote"},
 				{Type: ARG, Value: "single quote"},
@@ -59,7 +59,7 @@ func TestTokenize(t *testing.T) {
 		},
 		{
 			input: "cmd1 | cmd2 '|'",
-			expected: []ExpectedToken{
+			expected: []expectedToken{
 				{Type: ARG, Value: "cmd1"},
 				{Type: PIPE, Value: "|"},
 				{Type: ARG, Value: "cmd2"},
@@ -68,28 +68,28 @@ func TestTokenize(t *testing.T) {
 		},
 		{
 			input: "cmd $(subcmd arg)",
-			expected: []ExpectedToken{
+			expected: []expectedToken{
 				{Type: ARG, Value: "cmd"},
 				{Type: SUBSTITUTION, Value: "subcmd arg"},
 			},
 		},
 		{
 			input: "cmd $(outer $(inner))",
-			expected: []ExpectedToken{
+			expected: []expectedToken{
 				{Type: ARG, Value: "cmd"},
 				{Type: SUBSTITUTION, Value: "outer $(inner)"},
 			},
 		},
 		{
 			input: "cmd $(outer '(')",
-			expected: []ExpectedToken{
+			expected: []expectedToken{
 				{Type: ARG, Value: "cmd"},
 				{Type: SUBSTITUTION, Value: "outer '('"},
 			},
 		},
 		{
 			input: "cmd1 arg1 escaped\\ arg2 \"quote spaces\" | cmd2 $(sub $(inner))",
-			expected: []ExpectedToken{
+			expected: []expectedToken{
 				{Type: ARG, Value: "cmd1"},
 				{Type: ARG, Value: "arg1"},
 				{Type: ARG, Value: "escaped arg2"},
