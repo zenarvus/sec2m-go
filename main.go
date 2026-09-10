@@ -427,7 +427,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			stdout.Write([]byte("updated: "+string(epath)+"\n"))
 			return nil
 
-		} else { stdout.Write([]byte("update attempt cancelled")); return nil }
+		} else { stdout.Write([]byte("update attempt cancelled\n")); return nil }
 	
 	case "mtime":
 
@@ -514,7 +514,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 				return errors.New("Error while saving changes: "+err.Error())
 			}
 
-			stdout.Write([]byte(epath+" deleted"))
+			stdout.Write([]byte(epath+" deleted\n"))
 			return nil
 		
 		} else { stdout.Write([]byte("deletion attempt cancelled\n")); return nil }
@@ -543,7 +543,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			stdout.Write([]byte(dpath+" deleted\n"))
 			return nil
 
-		} else { stdout.Write([]byte("deletion attempt cancelled")); return nil }
+		} else { stdout.Write([]byte("deletion attempt cancelled\n")); return nil }
 
 	// ls does not accept stdin as argument
 	case "ls":

@@ -136,7 +136,7 @@ type Argon2IDParams struct {
 
 ///////////////////////////////////////////////
 
-const MAX_FILE_SIZE = 1024*1024*1024*1 // 1GiB
+const MAX_FILE_SIZE = 1024*1024*512 // 512MiB
 
 type Env struct {
 	EncryptedValue []byte // Encrypted value with the session key
