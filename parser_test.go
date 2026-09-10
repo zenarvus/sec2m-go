@@ -126,7 +126,7 @@ func TestTokenize(t *testing.T) {
 					t.Errorf("token %d: expected type %d, got %d", i, expectedTok.Type, tok.Type)
 				}
 				
-				actualVal := tok.Value.String()
+				actualVal := string(tok.Value)
 				if actualVal != expectedTok.Value {
 					t.Errorf("token %d: expected value %q, got %q", i, expectedTok.Value, actualVal)
 				}

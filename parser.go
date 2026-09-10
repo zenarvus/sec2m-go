@@ -21,6 +21,8 @@ package main
 import (
 	"bytes"
 	"errors"
+
+	"github.com/zenarvus/sec2m-go/securemem"
 )
 
 // Process things like:
@@ -36,7 +38,7 @@ const(
 
 type Token struct {
 	Type TokenType
-	Value bytes.Buffer
+	Value []byte
 }
 
 func tokenize(input []byte) ([]Token, error) {
@@ -46,15 +48,20 @@ func tokenize(input []byte) ([]Token, error) {
 		inQuote byte = '0' // Are we in a quote? It's the quote char used if we are in one.
 		escaped bool // Is the current character escaped? (via "\")
 		parenCount int // The parenthesis count used in command substitutions
+		scratch bytes.Buffer
 	)
 
 	// Add the generated token to tokens list and empty token variable for the next token
 	emit := func() {
 		// If token length is greater than zero, or token type is substitution, add it to the arguments list
-		if token.Value.Len() > 0 || token.Type == SUBSTITUTION {
-			tokens = append(tokens, token)
-			token.Type = ARG
-			token.Value = bytes.Buffer{}
+		if scratch.Len() > 0 || token.Type == SUBSTITUTION {
+			token.Value = bytes.Clone(scratch.Bytes()) // We need to clone it as scratch.Reset() reuses the same slice
+			tokens = append(tokens, token) // append the token
+
+			token.Type = ARG // reset the token type
+			token.Value = []byte{} // reset the value field
+			securemem.ZeroBytes(scratch.Bytes()) // zero the scratch bytes
+			scratch.Reset() // reset the scratch
 		}
 	}
 
@@ -68,13 +75,13 @@ func tokenize(input []byte) ([]Token, error) {
 		if escaped {
 			switch b {
 			case 'n':
-				token.Value.WriteByte('\n')
+				scratch.WriteByte('\n')
 			case 't':
-				token.Value.WriteByte('\t')
+				scratch.WriteByte('\t')
 			case 'r':
-				token.Value.WriteByte('\r')
+				scratch.WriteByte('\r')
 			default:
-				token.Value.WriteByte(b)
+				scratch.WriteByte(b)
 			}
 			escaped = false
 			continue	
@@ -112,7 +119,7 @@ func tokenize(input []byte) ([]Token, error) {
 				}
 			}
 			// Write the byte to the token and skip it
-			token.Value.WriteByte(b)
+			scratch.WriteByte(b)
 			continue
 
 		}
@@ -126,7 +133,7 @@ func tokenize(input []byte) ([]Token, error) {
 				inQuote = '0'
 			// Else, write the char to the quote token
 			} else {
-				token.Value.WriteByte(b)
+				scratch.WriteByte(b)
 
 			}
 			continue // Skip the char
@@ -143,7 +150,7 @@ func tokenize(input []byte) ([]Token, error) {
 				i++ // Skip the starting parenthesis
 
 			// If not, consider it as a literal char
-			} else { token.Value.WriteByte(b) }
+			} else { scratch.WriteByte(b) }
 		// If it's a quote char, start a quote with that char
 		case '\'', '"':
 			inQuote = b
@@ -151,14 +158,14 @@ func tokenize(input []byte) ([]Token, error) {
 		case '|':
 			emit()
 			token.Type = PIPE
-			token.Value.WriteByte('|')
+			scratch.WriteByte('|')
 			emit()
 		// If it's a regular space, it's the ending of the token generated so far
 		case ' ', '\n', '\t':
 			emit() // emit the token
 		// If the char is nothing above, append it to the current token
 		default:
-			token.Value.WriteByte(b)
+			scratch.WriteByte(b)
 		}
 	}
 

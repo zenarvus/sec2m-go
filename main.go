@@ -29,6 +29,7 @@ import (
 	"os/signal"
 	"path"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -258,7 +259,7 @@ func startShell(sess *core.Session) error {
 		}
 
 		if len(args) > 0 {
-			switch string(args[0].Value.String()) {
+			switch string(string(args[0].Value)) {
 			case "exit":
 				rl.Close()
 				return nil
@@ -280,6 +281,11 @@ func startShell(sess *core.Session) error {
 func processPipeline(
 	sess *core.Session, tokens []Token, stdin io.Reader, finalStdout io.Writer,
 ) (error) {
+	defer func(){
+		// explicit zeroing after usage
+		for _,token := range tokens { securemem.ZeroBytes(token.Value) }
+	}()
+
 	// commants split using "|"
 	var commandlist [][]Token
 
@@ -329,6 +335,8 @@ func processPipeline(
 
 		currentStdin = nextStdin // update stdin to next stdin
 	}
+
+	runtime.GC() // manual garbage collection to cleanup whatever mess we created
 
 	return nil
 }
@@ -967,7 +975,7 @@ func processAllSubstitutions(sess *core.Session, tokens []Token) ([][]byte, erro
 func processSubstitution(sess *core.Session, input Token) ([]byte, error) {
 	if input.Type == SUBSTITUTION {
 
-		cmdArgs,err := tokenize(input.Value.Bytes())
+		cmdArgs,err := tokenize(input.Value)
 		if err != nil {return nil, err}
 
 		var buf = &bytes.Buffer{}
@@ -976,7 +984,7 @@ func processSubstitution(sess *core.Session, input Token) ([]byte, error) {
 
 		return buf.Bytes(),nil
 
-	} else { return input.Value.Bytes(), nil }
+	} else { return input.Value, nil }
 }
 
 ///////////////////////////////////////////////////////

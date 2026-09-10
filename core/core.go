@@ -16,8 +16,6 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-// TODO: Write a function in securemem that converts a regular golang slice to a manually managed one by zeroing the original
-
 package core
 
 import (
