@@ -74,10 +74,12 @@ func main() {
 
 		vaultPath := getVaultPath()
 
-		pw := getPassword(nil, "Set vault password: ")
+		pw,err := getInput(nil, "set password: ", true)
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer securemem.ZeroBytes(pw)
 
-		pwAgain := getPassword(nil, "Repeat password: ")
+		pwAgain,err := getInput(nil, "repeat: ", true)
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer securemem.ZeroBytes(pwAgain)
 
 		if !bytes.Equal(pw, pwAgain) {
@@ -102,13 +104,16 @@ func main() {
 			os.Exit(1)
 		}
 
-		oldpw := getPassword(nil, "Old password: ")
+		oldpw,err := getInput(nil, "old password: ", true)
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer securemem.ZeroBytes(oldpw)
 
-		newpw := getPassword(nil, "New password: ")
+		newpw,err := getInput(nil, "new password: ", true)
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer securemem.ZeroBytes(newpw)
 
-		newpwagain := getPassword(nil, "Retype password: ")
+		newpwagain,err := getInput(nil, "repeat: ", true)
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer securemem.ZeroBytes(newpwagain)
 
 		if !bytes.Equal(newpw, newpwagain) {
@@ -136,7 +141,8 @@ func main() {
 	case "shell":
 		vaultPath := getVaultPath()
 
-		pw := getPassword(nil, "Vault password: ")
+		pw,err := getInput(nil, "password: ", true)
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer securemem.ZeroBytes(pw)
 
 		sess, err := core.LoadSession(vaultPath, pw)
@@ -154,7 +160,8 @@ func main() {
 	case "shot":
 		vaultPath := getVaultPath()
 
-		pw := getPassword(nil, "Vault password: ")
+		pw,err := getInput(nil, "password: ", true)
+		if err != nil{fmt.Println(err); os.Exit(1)}
 		defer securemem.ZeroBytes(pw)
 
 		sess, err := core.LoadSession(vaultPath, pw)
@@ -350,12 +357,12 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 	if sess == nil {
 		isOneshot = true
 
-		passwd := getPassword(sess, "Vault password: ")
+		passwd,err := getInput(sess, "password: ", true)
+		if err != nil {return nil,func(){},err}
 		defer securemem.ZeroBytes(passwd)
 
 		vaultPath := getVaultPath()
 
-		var err error
 		sess, err = core.LoadSession(vaultPath, passwd)
 		if err != nil {
 			fmt.Println(err)
@@ -379,7 +386,7 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 		if err != nil { return nil, func(){}, err }
 		err = sess.Save()
 		if err != nil { return nil, func(){}, errors.New("Error while saving changes: "+err.Error()) }
-		return []byte("inserted: "+string(putArgs[0])+"\n"), func(){}, nil
+		return []byte("inserted: "+string(putArgs[0])), func(){}, nil
 	
 	case "mput":
 
@@ -402,7 +409,7 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 		if err != nil { return nil,func(){}, err }
 		err = sess.Save()
 		if err != nil { return []byte{},func(){}, errors.New("Error while saving changes: "+err.Error()) }
-		return []byte("inserted: "+string(epath)+"\n"),func(){}, nil
+		return []byte("inserted: "+string(epath)),func(){}, nil
 
 	case "update":
 		updateArgs, err := getArgs(sess, 2, args[1:], stdin, true)
@@ -414,16 +421,16 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 		var value = updateArgs[1]
 
 		fmt.Println("confirm the update attempt:",string(epath))
-		input := getPassword(sess, "(y/n): ")
+		input,err := getInput(sess, "(y/n): ", false)
 
 		if string(input) == "y" {
 			err := sess.Update(string(epath), value)
 			if err != nil { return nil,func(){}, err }
 			err = sess.Save()
 			if err != nil { return nil, func(){}, errors.New("Error while saving changes: "+err.Error()) }
-			return []byte("updated: "+string(epath)+"\n"),func(){}, nil
+			return []byte("updated: "+string(epath)),func(){}, nil
 
-		} else { return []byte("Update attempt cancelled\n"),func(){}, nil }
+		} else { return []byte("update attempt cancelled"),func(){}, nil }
 	
 	case "mtime":
 
@@ -477,7 +484,7 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 			return nil,func(){}, errors.New("Error while saving changes: "+err.Error())
 		}
 
-		return []byte("Key moved to the new destination\n"),func(){}, nil
+		return []byte("key moved to the new destination"),func(){}, nil
 
 	case "rm": // Remove a single entry
 		rmArgs, err := getArgs(sess, 1, args[1:], stdin, false)
@@ -488,7 +495,7 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 		var epath = string(rmArgs[0])
 
 		fmt.Println("confirm the deletion attempt:",epath)
-		input := getPassword(sess, "(y/n): ")
+		input,err := getInput(sess, "(y/n): ", false)
 
 		if string(input) == "y" {
 			err := sess.Rm(string(epath))
@@ -499,7 +506,7 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 				return nil,func(){}, errors.New("Error while saving changes: "+err.Error())
 			}
 
-			return []byte(epath+" deleted\n"),func(){}, nil
+			return []byte(epath+" deleted"),func(){}, nil
 		
 		} else { return []byte("deletion attempt cancelled"),func(){}, nil }
 
@@ -511,7 +518,7 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 		var dpath = string(rmdArgs[0])
 
 		fmt.Println("confirm the deletion attempt:",dpath)
-		input := getPassword(sess, "(y/n): ")
+		input,err := getInput(sess, "(y/n): ", false)
 
 		if string(input) == "y" {
 			err := sess.Rmd(dpath)
@@ -522,7 +529,7 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 				return nil,func(){}, errors.New("Error while saving changes: "+err.Error())
 			}
 
-			return []byte(dpath+" deleted\n"),func(){}, nil
+			return []byte(dpath+" deleted"),func(){}, nil
 
 		} else { return []byte("deletion attempt cancelled"),func(){}, nil }
 
@@ -719,14 +726,14 @@ func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastComm
 			// Parse the expanded shortcut string into arguments
 			expandedArgs, err := tokenize([]byte(expanded))
 			if err != nil {
-				return nil,func(){}, fmt.Errorf("Shortcut expansion error: %w", err)
+				return nil,func(){}, fmt.Errorf("shortcut expansion error: %w", err)
 			}
 
 			return processPipeline(sess, expandedArgs, stdin, lastCommand)
 		}
 	}
 
-	return nil,func(){}, errors.New("Unknown command: '"+string(args[0])+"'")
+	return nil,func(){}, errors.New("unknown command: '"+string(args[0])+"'")
 }
 
 func getShortcuts(sess *core.Session) (map[string][]byte) {
@@ -761,22 +768,21 @@ func getVaultPath() string {
 	return vaultPath
 }
 
-// getPassword prompts user to give an input. The written text will not shown.
-func getPassword(sess *core.Session, prompt string) []byte {
-
+// getInput prompts user to give an input. The written text will not shown if hidden is true.
+func getInput(sess *core.Session, prompt string, hidden bool) ([]byte, error) {
 	fmt.Fprintf(os.Stderr, "%s", prompt)
 
-	// Get the old terminal state
 	fd := int(os.Stdin.Fd())
-	oldState, err := term.GetState(fd)
-	if err != nil {
-		fmt.Println("\nError reading state:", err)
-		if sess != nil { sess.Destroy() }
-		os.Exit(1)
-	}
-	// Catch the interrupt signal and safely restore echo
+
+	// Put the terminal into raw mode to catch key presses
+	oldState, err := term.MakeRaw(fd)
+	if err != nil { return nil, err }
+	defer term.Restore(fd, oldState)
+
+	// restore the state on SIGINT or SIGTERM
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 	go func() {
 		<-sigChan
 		term.Restore(fd, oldState)
@@ -784,15 +790,63 @@ func getPassword(sess *core.Session, prompt string) []byte {
 		os.Exit(1)
 	}()
 
-	input, err := term.ReadPassword(int(os.Stdin.Fd()))
-	if err != nil {
-		fmt.Println("\nError reading input:", err)
-		if sess != nil { sess.Destroy() }
-		os.Exit(1)
+	var password []byte
+	buf := make([]byte, 1)
+
+	for {
+		_, err := os.Stdin.Read(buf)
+		if err != nil { break }
+
+		b := buf[0]
+
+		// Handle ctrl+c (ascii 3)
+        if b == 3 {
+            term.Restore(fd, oldState)
+            fmt.Fprintf(os.Stderr, "\r\n")
+            return nil, errors.New("interrupted")
+        }
+
+		// suppress ansi escape sequences (arrow keys, home, end, etc.)
+		if b == 27 { // 0x1B (esc)
+			// read the next character to check for '['
+			seq := make([]byte, 2)
+			n, _ := os.Stdin.Read(seq[:1])
+			// If it's '[', read and consume one more byte too.
+			if n > 0 && seq[0] == '[' {
+				// Read the final specifier byte (e.g., A, B, C, D)
+				os.Stdin.Read(seq[1:2])
+			}
+			continue
+		}
+
+		// Handle enter (\r or \n)
+		if b == '\r' || b == '\n' { break }
+
+		// Handle backspace (ascii 8) and del (ascii 127)
+		if b == 8 || b == 127 {
+			if len(password) > 0 {
+				password = password[:len(password)-1]
+				// erase the last asterisk: step back, overwrite with space, step back
+				fmt.Fprintf(os.Stderr, "\b \b")
+			}
+			continue
+		}
+
+		// Skip non-printable control characters
+		if b < 32 { continue }
+
+		// Store the key
+		password = append(password, b)
+		// if it's hidden, show asterix instead of raw chars
+		if hidden {
+			fmt.Fprintf(os.Stderr, "*")
+
+		} else { fmt.Fprintf(os.Stderr, "%s", string(b)) }
 	}
 
-	fmt.Fprintln(os.Stderr)
-	return input
+	// Move to a new line after raw mode finishes
+	fmt.Fprintf(os.Stderr, "\r\n")
+	return password, nil
 }
 
 // get the arguments from passed positional arguments and stdin. Give error if it's not enough to create args in requiredCount.
@@ -851,7 +905,8 @@ func getArgs(
 	if ask && requiredCount-len(totalargs) > 0 {
 		// Get argument until requiredCount gets equal to len(totalargs)
 		for requiredCount-len(totalargs) > 0 {
-			arg := getPassword(sess, fmt.Sprintf("Arg-%v:", len(totalargs)+1))
+			arg,err := getInput(sess, fmt.Sprintf("arg-%v: ", len(totalargs)+1), true)
+			if err != nil {return nil,err}
 			totalargs = append(totalargs, arg)
 		}
 	}

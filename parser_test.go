@@ -23,7 +23,6 @@ import (
 	"testing"
 )
 
-// Helper struct to make expected values easier to define (using string instead of bytes.Buffer)
 type ExpectedToken struct {
 	Type  TokenType
 	Value string
@@ -86,7 +85,6 @@ func TestTokenize(t *testing.T) {
 			expected: []ExpectedToken{
 				{Type: ARG, Value: "cmd"},
 				{Type: SUBSTITUTION, Value: "outer '('"},
-
 			},
 		},
 		{
@@ -113,9 +111,7 @@ func TestTokenize(t *testing.T) {
 			}
 
 			// If we expected an error and got one, the test for this case is complete
-			if tt.expectError {
-				return
-			}
+			if tt.expectError { return }
 
 			// Check token count
 			if len(tokens) != len(tt.expected) {
