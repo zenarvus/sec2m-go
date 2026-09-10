@@ -22,15 +22,12 @@ case "$1" in
 			kill -s TERM "$(cat "$PID_FILE")" 2>/dev/null
 			rm -f "$PID_FILE"
 		fi
+		
+		# Assign secret to a local variable inside the running subshell. It wont appear on /proc/pid/environ
+		SECRET="$(cat)" # Read the secret from stdin
 
-		SECRET_INPUT=$(cat) # get the secret input from stdin
-
-		# Launch a background process
+		# Launch a background process. It inherits the variables of the parent shell
         (
-			# Assign secret to a local variable inside the running subshell. It wont appear on /proc/pid/environ
-			SECRET="$SECRET_INPUT"
-			unset SECRET_INPUT # unset the SECRET_INPUT  local variable in the sub shell
-
 			# Set trap: stream variable directly to wtype on USR1 signal, remove the PID file and exit
 			trap '
 				printf "%s" "$SECRET" | wtype -
@@ -54,8 +51,6 @@ case "$1" in
         VAULT_PID=$! # get the pid of the sub shell
         echo "$VAULT_PID" > "$PID_FILE" # write the pid to the pid file
 
-        # Wipe local variable in caller shell
-        unset SECRET_INPUT
         echo "secret stored in PID $VAULT_PID for 20 seconds"
         ;;
 

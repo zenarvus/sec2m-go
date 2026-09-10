@@ -23,6 +23,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -168,13 +169,13 @@ func main() {
 			os.Exit(1)
 		}
 
-		cmdArgs,err := parseArgs([]byte(os.Args[2]))
+		cmdArgs,err := tokenize([]byte(os.Args[2]))
 		if err != nil {
 			fmt.Println("Error while parsing arguments:", err)
 			os.Exit(1)
 		}
 
-		result,resDealloc, err := processCommandlist(sess, cmdArgs, []byte{}, true)
+		result,resDealloc, err := processPipeline(sess, cmdArgs, bytes.NewReader(nil), true)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -214,7 +215,7 @@ func main() {
 			byteArgs = append(byteArgs, []byte(os.Args[i]))
 		}
 
-		result, resultDealloc, err := processCommand(nil, []byte{}, byteArgs, true)
+		result, resultDealloc, err := processCommand(nil, bytes.NewReader(nil), byteArgs, true)
 		if err != nil {
 			fmt.Println("Error: "+err.Error())
 			os.Exit(1)
@@ -249,14 +250,14 @@ func startShell(sess *core.Session) error {
 			return err
 		}
 
-		args, err := parseArgs([]byte(input))
+		args, err := tokenize([]byte(input))
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
 
 		if len(args) > 0 {
-			switch string(args[0]) {
+			switch string(args[0].Value.String()) {
 			case "exit":
 				rl.Close()
 				return nil
@@ -270,7 +271,7 @@ func startShell(sess *core.Session) error {
 			}
 		}
 
-		result, resultDealloc, err := processCommandlist(sess, args, []byte{}, true)
+		result, resultDealloc, err := processPipeline(sess, args, bytes.NewReader(nil), true)
 		if err != nil { fmt.Println(err); continue }
 
 		fmt.Printf("%s\n", result)
@@ -279,25 +280,26 @@ func startShell(sess *core.Session) error {
 	}
 }
 
-func processCommandlist(
-	sess *core.Session, args [][]byte, currentStdin []byte, isPipelineLastCommand bool,
+func processPipeline(
+	sess *core.Session, tokens []Token, stdin io.Reader, isPipelineLastCommand bool,
 ) ([]byte, func(), error) {
-	// split arguments using "|"
-	var commandlist [][][]byte
+	// commants split using "|"
+	var commandlist [][]Token
 
-	var command [][]byte
-	for i,arg := range args {
+	var command []Token
+
+	for i,token := range tokens {
 		// If we arrive to the pipe character, add the command slice generated so far to commandList
-		if string(arg) == "|" {
+		if  token.Type == PIPE {
 			commandlist = append(commandlist, command)
-			command = [][]byte{}
+			command = []Token{}
 			continue
 		}
 
-		command = append(command, arg)
+		command = append(command, token)
 
 		// If this is the end of the arguments, add the command slice generated so far to commandList
-		if i == len(args)-1 {
+		if i == len(tokens)-1 {
 			commandlist = append(commandlist, command)
 		}
 
@@ -305,6 +307,8 @@ func processCommandlist(
 
 	var result []byte
 	var chainDealloc []func()
+
+	var currentStdin = stdin
 
 	cleanupAll := func() {
 		for _,deallocator := range chainDealloc { if deallocator!= nil {deallocator()} }
@@ -316,12 +320,17 @@ func processCommandlist(
 		// If it's the last command in the commandlist and the caller says it's the last command in outer pipeline (required for exec in shortcuts etc)
 		isLastCommand := i == len(commandlist)-1 && isPipelineLastCommand
 
-		res,resDealloc, err := processCommand(sess, currentStdin, commandArgs, isLastCommand)
+		// Process the substitutions and return an array of []byte as args
+		args,deallocSubs,err := processAllSubstitutions(sess, commandArgs)
+		defer deallocSubs() // deallocate the substitution results at the end via the deallocation chain func
+		if err != nil {return []byte{}, func(){}, err}
+
+		res,resDealloc, err := processCommand(sess, currentStdin, args, isLastCommand)
 		if err != nil { return nil,cleanupAll, err }
 
 		chainDealloc = append(chainDealloc, resDealloc)
 		
-		currentStdin = res
+		currentStdin = bytes.NewReader(res)
 
 		// If we are at the end of the commandList, pass the res to the final result.
 		if i == len(commandlist)-1 { result = res }
@@ -334,7 +343,7 @@ func processCommandlist(
 var placeholderRegex = regexp.MustCompile(`\{\d+\}`) // Used to replace the placeholders in shortcuts
 
 // Process command processes the given command and return the stdout
-func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCommand bool) ([]byte, func(), error) {
+func processCommand(sess *core.Session, stdin io.Reader, args [][]byte, lastCommand bool) ([]byte, func(), error) {
 	isOneshot := false
 
 	// If no session exists, create one.
@@ -354,10 +363,6 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		}
 	}
 
-	args,deallocSubs,err := processCmdSubstitutions(sess, args)
-	defer deallocSubs() // deallocate the substitution results at the end via the deallocation chain func
-	if err != nil {return []byte{}, func(){}, err}
-
 	shortcuts := getShortcuts(sess)
 
 	if(isOneshot) { defer sess.Destroy() }
@@ -365,7 +370,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	switch string(args[0]) {
 	case "put": // Add an entry with the value
 
-		putArgs, err := getArgsFromArgsNStdin(sess, 2, args[1:], pipeStdin, true)
+		putArgs, err := getArgs(sess, 2, args[1:], stdin, true)
 		if err != nil {
 			return nil, func(){}, errors.New("Usage: put <epath> <value>\n"+err.Error())
 		}
@@ -378,7 +383,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	
 	case "mput":
 
-		mputArgs, err := getArgsFromArgsNStdin(sess, 3, args[1:], pipeStdin, true)
+		mputArgs, err := getArgs(sess, 3, args[1:], stdin, true)
 		if err != nil {
 			return []byte{},func(){}, errors.New("Usage: put <epath> <mtime> <value>\n"+err.Error())
 		}
@@ -400,7 +405,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return []byte("inserted: "+string(epath)+"\n"),func(){}, nil
 
 	case "update":
-		updateArgs, err := getArgsFromArgsNStdin(sess, 2, args[1:], pipeStdin, true)
+		updateArgs, err := getArgs(sess, 2, args[1:], stdin, true)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: update <epath> <value>\n"+err.Error())
 		}
@@ -422,7 +427,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 	
 	case "mtime":
 
-		mtimeArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
+		mtimeArgs, err := getArgs(sess, 1, args[1:], stdin, false)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: mtime <epath>\n"+err.Error())
 		}
@@ -444,7 +449,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return fmt.Appendf(nil, "%v", mtimeInt),func(){}, nil
 		
 	case "get": // Get an entry's value
-		getArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
+		getArgs, err := getArgs(sess, 1, args[1:], stdin, false)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: get <epath>\n"+err.Error())
 		}
@@ -456,7 +461,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return val,deallocVal, nil
 
 	case "mv":
-		mvArgs, err := getArgsFromArgsNStdin(sess, 2, args[1:], pipeStdin, false)
+		mvArgs, err := getArgs(sess, 2, args[1:], stdin, false)
 		if err != nil {
 			return nil,func(){},errors.New("Usage: mv <old> <new>\n"+err.Error())
 		}
@@ -475,7 +480,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return []byte("Key moved to the new destination\n"),func(){}, nil
 
 	case "rm": // Remove a single entry
-		rmArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
+		rmArgs, err := getArgs(sess, 1, args[1:], stdin, false)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: rm <epath>\n"+err.Error())
 		}
@@ -500,7 +505,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 		
 	case "rmd": // Remove a directory
-		rmdArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
+		rmdArgs, err := getArgs(sess, 1, args[1:], stdin, false)
 		if err != nil { return nil,func(){}, errors.New("Usage: rmd <dpath>\n"+err.Error()) }
 
 		var dpath = string(rmdArgs[0])
@@ -556,7 +561,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			s.WriteString("\n")
 		}
 		
-		return s.Bytes(),func(){}, nil
+		return bytes.TrimSuffix(s.Bytes(),[]byte{'\n'}),func(){}, nil
 
 	// ls does not accept stdin as argument
 	case "lsall":
@@ -584,7 +589,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			s.WriteString("\n")
 		}
 		
-		return s.Bytes(),func(){}, nil
+		return bytes.TrimSuffix(s.Bytes(),[]byte{'\n'}),func(){}, nil
 
 	// cd does not support stdin as argument
 	case "cd":
@@ -611,8 +616,8 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 
 		shellCmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 
-		// If there is pipe stdin, pass it to the shellCmd's stdin
-		if len(pipeStdin) > 0 { shellCmd.Stdin = bytes.NewReader(pipeStdin) }
+		// pass stdin to the shellCmd's stdin
+		shellCmd.Stdin = stdin
 
 		var outBuf bytes.Buffer
 		// If it's the last command, forward the outputs to the process output.
@@ -632,20 +637,23 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return outBuf.Bytes(),func(){}, nil
 
 	case "eval":
-		evalArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
+		evalArgs, err := getArgs(sess, 1, args[1:], stdin, false)
 		if err != nil { return nil,func(){}, errors.New("Usage: eval <pipeline>\n"+err.Error()) }
 
 		var cmd = evalArgs[0]
-		cmdArgs, err := parseArgs(cmd)
+		cmdArgs, err := tokenize(cmd)
 		if err != nil { return nil,func(){}, err }
 
-		return processCommandlist(sess, cmdArgs, []byte{}, lastCommand)
+		return processPipeline(sess, cmdArgs, bytes.NewReader(nil), lastCommand)
 
 	// Read the stdin, split it with the given delimiter, iterate through them and execute the provided command in every iteration
 	case "iter":
 		if len(args) != 2 { return nil,func(){}, errors.New("Usage: iter <pipeline>")}
+
+		stdinBytes,err := io.ReadAll(stdin)
+		if err != nil {return nil,func(){}, err}
 		
-		lines := bytes.Split(pipeStdin, []byte{'\n'})
+		lines := bytes.Split(stdinBytes, []byte{'\n'})
 
 		var finalResult []byte
 		var deallocateFn func()
@@ -653,10 +661,10 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			// Skip empty slices resulting from trailing newline characters
 			if len(bytes.TrimSpace(line)) == 0 { continue }
 
-			cmd, err := parseArgs(args[1])
+			cmd, err := tokenize(args[1])
 			if err != nil {return nil,func(){}, err}
 
-			result,deallocFn, err := processCommandlist(sess, cmd, line, lastCommand)
+			result,deallocFn, err := processPipeline(sess, cmd, bytes.NewReader(line), lastCommand)
 			deallocateFn = deallocFn
 			if err != nil {return nil,func(){}, err}
 			finalResult = append(finalResult, result...)
@@ -665,7 +673,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return finalResult,deallocateFn, nil
 	
 	case "senv":
-		senvArgs, err := getArgsFromArgsNStdin(sess, 2, args[1:], pipeStdin, false)
+		senvArgs, err := getArgs(sess, 2, args[1:], stdin, false)
 		if err != nil {
 			return nil,func(){}, errors.New("Usage: senv <name> <value>\n"+err.Error())
 		}
@@ -676,7 +684,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return nil,func(){}, nil
 
 	case "genv":
-		genvArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
+		genvArgs, err := getArgs(sess, 1, args[1:], stdin, false)
 		if err != nil { return nil,func(){}, errors.New("Usage: genv <name>\n"+err.Error()) }
 
 		val,dealloc,err := sess.Genv(string(genvArgs[0]))
@@ -685,7 +693,7 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 		return val, dealloc, nil
 
 	case "renv":
-		renvArgs, err := getArgsFromArgsNStdin(sess, 1, args[1:], pipeStdin, false)
+		renvArgs, err := getArgs(sess, 1, args[1:], stdin, false)
 		if err != nil { return nil,func(){}, errors.New("Usage: renv <name>\n"+err.Error()) }
 
 		sess.Renv(string(renvArgs[0]))
@@ -709,12 +717,12 @@ func processCommand(sess *core.Session, pipeStdin []byte, args [][]byte, lastCom
 			expanded = placeholderRegex.ReplaceAllString(expanded, "")
 
 			// Parse the expanded shortcut string into arguments
-			expandedArgs, err := parseArgs([]byte(expanded))
+			expandedArgs, err := tokenize([]byte(expanded))
 			if err != nil {
 				return nil,func(){}, fmt.Errorf("Shortcut expansion error: %w", err)
 			}
 
-			return processCommandlist(sess, expandedArgs, pipeStdin, lastCommand)
+			return processPipeline(sess, expandedArgs, stdin, lastCommand)
 		}
 	}
 
@@ -787,10 +795,10 @@ func getPassword(sess *core.Session, prompt string) []byte {
 	return input
 }
 
-// get the arguments from passed arguments and stdin. Give error if it's not enough to create args in requiredCount.
-// Ask for user input if given arguments does not match the required count and ask is true
-func getArgsFromArgsNStdin(
-	sess *core.Session, requiredCount int, givenargs [][]byte, stdin []byte, ask bool,
+// get the arguments from passed positional arguments and stdin. Give error if it's not enough to create args in requiredCount.
+// Ask for user input if given arguments does not match the required count while ask is true
+func getArgs(
+	sess *core.Session, requiredCount int, givenargs [][]byte, stdin io.Reader, ask bool,
 ) (totalargs [][]byte, err error) {
 
 	for _,arg := range givenargs {
@@ -809,9 +817,12 @@ func getArgsFromArgsNStdin(
 	} else {
 		requiredArgsLeft := requiredCount - len(totalargs)
 		var stdinArgs [][]byte
-		// Only split stdinArgs if stdin is not empty. If we don't do that, bytes.Split returns stdinArgs with one empty slice item.
-		if len(stdin) > 0 {
-			stdinArgs = bytes.Split(stdin, []byte{'\n'})
+		// Only split stdinArgs if stdinBytes is not empty. If we don't do that, bytes.Split returns stdinArgs with one empty slice item.
+		stdinBytes,err := io.ReadAll(stdin)
+		if err != nil {return nil, err}
+
+		if len(stdinBytes) > 0 {
+			stdinArgs = bytes.Split(stdinBytes, []byte{'\n'})
 		}
 
 		// Give error if stdinArgs has not enough arguments to satisfy requiredArgsLeft
@@ -840,7 +851,7 @@ func getArgsFromArgsNStdin(
 	if ask && requiredCount-len(totalargs) > 0 {
 		// Get argument until requiredCount gets equal to len(totalargs)
 		for requiredCount-len(totalargs) > 0 {
-			arg := getPassword(sess, fmt.Sprintf("Arg-%v:", len(totalargs)))
+			arg := getPassword(sess, fmt.Sprintf("Arg-%v:", len(totalargs)+1))
 			totalargs = append(totalargs, arg)
 		}
 	}
@@ -848,7 +859,7 @@ func getArgsFromArgsNStdin(
 	return totalargs, nil
 }
 
-func processCmdSubstitutions(sess *core.Session, args [][]byte) ([][]byte,func(), error) {
+func processAllSubstitutions(sess *core.Session, tokens []Token) ([][]byte,func(), error) {
 	var expanded [][]byte
 	var deallocators []func()
 
@@ -856,8 +867,8 @@ func processCmdSubstitutions(sess *core.Session, args [][]byte) ([][]byte,func()
 		for _,deallocator := range deallocators { if deallocator!= nil {deallocator()} }
     }
 
-	for _, arg := range args {
-		exp,dealloc, err := processSubstitution(sess, arg)
+	for _,token := range tokens {
+		exp,dealloc, err := processSubstitution(sess, token)
 		deallocators = append(deallocators, dealloc) // chain deallocators
 		if err != nil { return nil,cleanupAll, err }
 		expanded = append(expanded, exp)
@@ -865,116 +876,19 @@ func processCmdSubstitutions(sess *core.Session, args [][]byte) ([][]byte,func()
 	return expanded, cleanupAll, nil
 }
 
-func processSubstitution(sess *core.Session, input []byte) ([]byte,func(), error) {
-	if bytes.HasPrefix(input, []byte("$(")) && bytes.HasSuffix(input, []byte(")")) {
-		cmdArgsStr := input[2:len(input)-1]
+// Get the substitution token, tokenize it's value, process the pipeline and return the value
+func processSubstitution(sess *core.Session, input Token) ([]byte,func(), error) {
+	if input.Type == SUBSTITUTION {
 
-		cmdArgs,err := parseArgs(cmdArgsStr)
+		cmdArgs,err := tokenize(input.Value.Bytes())
 		if err != nil {return nil,func(){}, err}
 
-		res,dealloc, err := processCommandlist(sess, cmdArgs, []byte{}, false)
+		res,dealloc, err := processPipeline(sess, cmdArgs, bytes.NewReader(nil), false)
 		if err != nil { return nil,func(){}, err }
 
 		return res,dealloc,nil
 
-	} else { return input,func(){securemem.ZeroBytes(input)}, nil }
-}
-
-// parseArgs splits the input into arguments where things in quotes and command substitutions considered one argument.
-func parseArgs(input []byte) ([][]byte, error) {
-	// Trim whitespace
-	input = bytes.TrimSpace(input)
-
-	var args [][]byte
-	var arg bytes.Buffer
-
-	inQuote := rune(0)
-	escaped := false
-
-	for i := 0; i < len(input); i++ {
-		r := rune(input[i])
-
-		// If the element is escaped, write it directly to arg, disable escaping and continue.
-		if escaped {
-			switch r {
-			case 'n':
-				arg.WriteRune('\n')
-			case 't':
-				arg.WriteRune('\t')
-			case 'r':
-				arg.WriteRune('\r')
-			default:
-				arg.WriteRune(r)
-			}
-			escaped = false
-			continue
-		}
-
-		// If there is a slash, escape the next element.
-		if r == '\\' { escaped=true; continue }
-
-		// If it's in quote
-		if inQuote != 0 {
-			// If the character is equal to the quote start character, make inQuote = 0
-			if r == inQuote {
-				inQuote = 0
-			// Else write whatever this char is to the current argument.
-			} else { arg.WriteRune(r) }
-			// Skip to the next char
-			continue
-		}
-
-		// Get $(...) as a whole argument
-		// TODO: Improve this. It lacks proper quote handling and escapes
-		if r == '$' && i+1 < len(input) && input[i+1] == '(' {
-			parenCount := 1
-
-			j := i+2 // the position of the first char in $()
-
-            // Find the matching closing parenthesis
-            for ; j < len(input); j++ {
-				// Skip the escape characters
-                if input[j] == '\\' && j+1 < len(input) { j++; continue }
-
-				// Handle with nested parenthesis
-                if input[j] == '(' {
-                    parenCount++
-                } else if input[j] == ')' {
-                    parenCount--
-					// break the loop when we reach to the parenthesis closing ours
-                    if parenCount == 0 { break }
-                }
-            }
-
-            if parenCount != 0 { return nil, fmt.Errorf("unclosed $() command substitution") }
-
-			arg.Write(input[i:j+1]) // Include everything from $( to ) including the last parenthesis
-
-            i = j // Advance the index past the closing ')'
-			// finish and append the arg
-			args = append(args, bytes.Clone(arg.Bytes()))
-			arg.Reset()
-            continue
-		}
-
-		if r == '"' || r == '\'' { inQuote=r; continue }
-
-		if r == ' ' || r == '\t' || r == '\n' {
-			if arg.Len() > 0 {
-				args = append(args, bytes.Clone(arg.Bytes())) // create a copy of arg.Bytes(), or arg.Reset will zero the value out
-				arg.Reset()
-			}
-			continue
-		}
-
-		arg.WriteRune(r)
-	}
-
-	if inQuote != 0 { return nil, fmt.Errorf("unclosed quote in command string") }
-
-	if arg.Len() > 0 { args = append(args, bytes.Clone(arg.Bytes())) }
-
-	return args, nil
+	} else { return input.Value.Bytes(),func(){input.Value.Reset()}, nil }
 }
 
 ///////////////////////////////////////////////////////
