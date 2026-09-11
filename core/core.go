@@ -127,9 +127,9 @@ type Entry struct {
 	MTime []byte `cmpck:"4"` // The modification time of the entry (uint64 unix epoch milliseconds [little endian])
 }
 type Argon2IDParams struct {
-	Iterations uint32 `cmpck:"1"` // Iterations. Max:16
-	Memory uint32 `cmpck:"2"` // Required memory in megabytes. Max:2048
-	Threads uint32 `cmpck:"3"` // Parallel threads used while deriving keys. Max:32
+	Iterations uint32 `cmpck:"1"` // Iterations. Min:1, Max:16
+	Memory uint32 `cmpck:"2"` // Required memory in megabytes. Min:32, Max:2048
+	Threads uint32 `cmpck:"3"` // Parallel threads used while deriving keys. Min:1, Max:32
 }
 
 ///////////////////////////////////////////////

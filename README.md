@@ -34,7 +34,7 @@
 
 **>** Command aliasing using the entries in `/.shortcut/`
 
-**>** TOTP, Clipboard copy/clearing, password generation and more with helper scripts
+**>** TOTP, Clipboard copy/clearing, password generation, commit signing and more with helper scripts
 
 ## Installation
 Sec2M is a single binary application with no external runtime dependencies nor config files. You just need go and git to install it.
