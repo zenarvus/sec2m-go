@@ -285,6 +285,8 @@ func processPipeline(
 		// explicit zeroing after usage
 		for _,token := range tokens { securemem.ZeroBytes(token.Value) }
 	}()
+	
+	defer runtime.GC() // manual garbage collection to cleanup whatever mess we created
 
 	// commants split using "|"
 	var commandlist [][]Token
@@ -333,10 +335,12 @@ func processPipeline(
 		err = processCommand(sess, currentStdin, currentStdout, args)
 		if err != nil { return err }
 
+		// If we are at the last command, add a newline to the currentStdout.
+		// readline will replace this newline with the prompt. Otherwise, it will replace the last line in stdout
+		if i == len(commandlist)-1 { currentStdout.Write([]byte("\n")) }
+
 		currentStdin = nextStdin // update stdin to next stdin
 	}
-
-	runtime.GC() // manual garbage collection to cleanup whatever mess we created
 
 	return nil
 }
@@ -344,6 +348,7 @@ func processPipeline(
 var placeholderRegex = regexp.MustCompile(`\{\d+\}`) // Used to replace the placeholders in shortcuts
 
 // Process command processes the given command and return the stdout
+// Outputs will contain an extra newline character at the end
 func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args [][]byte) (error) {
 	isOneshot := false
 
@@ -383,7 +388,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		err = sess.Save()
 		if err != nil { return errors.New("Error while saving changes: "+err.Error()) }
 
-		stdout.Write([]byte("inserted: "+string(putArgs[0])+"\n"))
+		stdout.Write([]byte("inserted: "+string(putArgs[0])))
 		return nil
 	
 	case "mput":
@@ -409,7 +414,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		err = sess.Save()
 		if err != nil { return errors.New("Error while saving changes: "+err.Error()) }
 
-		stdout.Write([]byte("inserted: "+string(epath)+"\n"))
+		stdout.Write([]byte("inserted: "+string(epath)))
 		return nil
 
 	case "update":
@@ -432,7 +437,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			err = sess.Save()
 			if err != nil { return errors.New("Error while saving changes: "+err.Error()) }
 
-			stdout.Write([]byte("updated: "+string(epath)+"\n"))
+			stdout.Write([]byte("updated: "+string(epath)))
 			return nil
 
 		} else { stdout.Write([]byte("update attempt cancelled\n")); return nil }
@@ -459,7 +464,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 
 		mtimeInt := binary.LittleEndian.Uint64(entry.MTime)
 
-		stdout.Write(fmt.Appendf(nil, "%v\n", mtimeInt))
+		stdout.Write(fmt.Appendf(nil, "%v", mtimeInt))
 		return nil
 		
 	case "get": // Get an entry's value
@@ -475,7 +480,6 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 
 		stdout.Write(val)
 		deallocVal()
-		stdout.Write([]byte("\n"))
 
 		return nil
 
@@ -497,7 +501,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			return errors.New("Error while saving changes: "+err.Error())
 		}
 
-		stdout.Write([]byte("key moved to the new destination\n"))
+		stdout.Write([]byte("key moved to the new destination"))
 		return  nil
 
 	case "rm": // Remove a single entry
@@ -522,10 +526,10 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 				return errors.New("Error while saving changes: "+err.Error())
 			}
 
-			stdout.Write([]byte(epath+" deleted\n"))
+			stdout.Write([]byte(epath+" deleted"))
 			return nil
 		
-		} else { stdout.Write([]byte("deletion attempt cancelled\n")); return nil }
+		} else { stdout.Write([]byte("deletion attempt cancelled")); return nil }
 
 		
 	case "rmd": // Remove a directory
@@ -548,10 +552,10 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 				return errors.New("Error while saving changes: "+err.Error())
 			}
 
-			stdout.Write([]byte(dpath+" deleted\n"))
+			stdout.Write([]byte(dpath+" deleted"))
 			return nil
 
-		} else { stdout.Write([]byte("deletion attempt cancelled\n")); return nil }
+		} else { stdout.Write([]byte("deletion attempt cancelled")); return nil }
 
 	// ls does not accept stdin as argument
 	case "ls":
@@ -588,7 +592,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			s.WriteString("\n")
 		}
 		
-		stdout.Write(s.Bytes())
+		stdout.Write(s.Bytes()[:s.Len()-1]) // ignore the last char (newline)
 		return nil
 
 	// ls does not accept stdin as argument
@@ -617,7 +621,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			s.WriteString("\n")
 		}
 		
-		stdout.Write(s.Bytes())
+		stdout.Write(s.Bytes()[:s.Len()-1]) // ignore the last char (newline)
 		return nil
 
 	// cd does not support stdin as argument
@@ -652,7 +656,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 
 		// Run the command
 		err := shellCmd.Run()
-    	if err != nil { return err } // Return both the captured output and the error
+    	if err != nil { return err } // Return both the captured output and the error	
 
 		return nil
 
@@ -710,7 +714,6 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		if err!=nil{return err}
 
 		stdout.Write(val)
-		stdout.Write([]byte("\n"))
 		dealloc()
 
 		return nil
@@ -871,7 +874,7 @@ func getInput(sess *core.Session, prompt string, hidden bool) ([]byte,func(), er
 		inputBuf[pos] = b
 		pos++ // as we first add and increase later, post represents the length of the array. Aka: the next element's index
 
-		// if it's hidden, show asterix instead of raw chars
+		// if it's hidden, show asterisk instead of raw chars
 		if hidden {
 			fmt.Fprintf(os.Stderr, "*")
 
@@ -927,9 +930,7 @@ func getArgs(
 
 		// Take what's available from stdinArgs
 		argsToTake := requiredArgsLeft
-		if len(stdinArgs) < argsToTake {
-			argsToTake = len(stdinArgs)
-		}
+		if len(stdinArgs) < argsToTake { argsToTake = len(stdinArgs) }
 
 		// Append those arguments to the totalargs list
 		for i := range argsToTake { totalargs = append(totalargs, stdinArgs[i]) }
