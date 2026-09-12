@@ -7,10 +7,7 @@ import (
     "golang.org/x/sys/unix"
 )
 
-// Setup on Darwin returns nil. (Disabling dumps globally via PT_DENY_ATTACH usually requires CGO).
-func Setup() error {
-    return nil
-}
+func Setup() error { return nil }
 
 func LockMemory(b []byte) error {
     if len(b) == 0 { return nil }

@@ -6,11 +6,8 @@ import (
 	"fmt"
 )
 
-// Setup is a no-op on generic platforms. 
-// We cannot reliably disable core dumps without OS-specific APIs.
-func Setup() error {
-	return nil
-}
+// Setup is a no-op on generic platforms. We cannot reliably disable core dumps without OS-specific APIs.
+func Setup() error { return nil }
 
 // LockMemory is a no-op on generic platforms.
 func LockMemory(b []byte) error {
@@ -18,24 +15,16 @@ func LockMemory(b []byte) error {
 }
 
 // UnlockMemory is a no-op on generic platforms.
-func UnlockMemory(b []byte) error {
-	return nil
-}
+func UnlockMemory(b []byte) error { return nil }
 
 // Alloc requests standard heap memory from the Go runtime.
-// WARNING: On unsupported platforms, this memory cannot be locked to RAM
-// and may be written to swap/page files by the operating system.
+// On unsupported platforms, this memory cannot be locked to RAM and may be written to swap files by the operating system.
 func Alloc(size int, opts ...Option) ([]byte, func(), error) {
-	if size <= 0 {
-		return nil, func() {}, fmt.Errorf("invalid allocation size: %d", size)
-	}
+	if size <= 0 { return nil, func() {}, fmt.Errorf("invalid allocation size: %d", size) }
 
 	// We still parse options so they don't cause unused variable errors, 
-	// though they have no effect here.
 	cfg := &config{lock: false}
-	for _, opt := range opts {
-		opt(cfg)
-	}
+	for _, opt := range opts { opt(cfg) }
 
 	// Allocate a standard Go byte slice on the heap.
 	b := make([]byte, size)

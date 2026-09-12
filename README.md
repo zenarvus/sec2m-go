@@ -12,15 +12,17 @@
 <br clear="left"/>
 
 ## Features
-**>** Everything stays local with a small and simple, Compack serialized `.sdb` file format
+**>** Simple, Compack serialized `.sdb` binary file format
 
 **>** Strong and flexible cryptographic primitive list containing xchacha20, sha3-256 and argon2id
 
 **>** Whole file HMAC integrity check using the Encrypt-Then-MAC scheme
 
-**>** Per-session key to store encryption and signature keys encrypted on memory and additional per-value encryption for in-memory security, along with core-dumping prevention (android & linux) and memory locking for the session key (windows, darwin, linux & android) on supported platforms
+**>** Per-session key encryption along with additional per-value encryption for in-memory security
 
-**>** Secret zeroing and deallocation after usage whenever possible
+**>** Core-dumping prevention (android & linux) and memory locking for the session key (windows, darwin, linux & android) on supported platforms
+
+**>** Explicit secret zeroing and deallocation after usage whenever possible
 
 **>** Extensible `[POSIX Portable Filepath] => [Binary Value]` array structure. Like UNIX, everything is an entry
 
@@ -42,7 +44,7 @@ git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build .
 Now you are ready to go!
 
 ## Roadmap
-Consider migrating to <https://github.com/reeflective/readline> or <https://github.com/c-bata/go-prompt>?
+Consider migrating to <https://github.com/reeflective/readline>
 
 ## Help
 ```
@@ -289,4 +291,39 @@ EncryptedMacKey = Encryption(MessageAuthenticationCodeKey, SessionKey, Nonce())
 EncryptedFieldValue = Encryption(value, InnerEncryptionKey, Nonce())
 EncryptedBody = Encryption(body, OuterEncryptionKey, Nonce())
 Signature = HMAC(MessageAuthenticationCodeKey, Version, Header, EncryptedBody) # Uses the provided hash algorithm for the HMAC signature. Authenticates the file version, headers and the encrypted data before decryption, and verifies if the password is correct.
+```
+
+## Codebase
+```
+├── LICENSE
+├── README.md
+├── core # core vault logic
+│   ├── core.go
+│   └── core_test.go
+├── go.mod
+├── go.sum
+├── help.go # just printing text
+├── helpers.sh # every-day helpers
+│   ├── clipboard.sh
+│   ├── clipman.sh
+│   ├── git-signer.sh
+│   ├── passgen.sh
+│   ├── spitter.sh
+│   └── totp.sh
+├── logo.png
+├── main.go # main cli logic that utilizes core
+├── main_test.go
+├── migration.sh # migration helpers
+│   ├── exporter.sh
+│   ├── flatten-kdbx.sh
+│   └── importer.sh
+├── parser.go # converting commands to tokens
+├── parser_test.go
+└── securemem # manual memory alloc/dealloc, buffer and zeroing
+    ├── darwin.go
+    ├── linux.go
+    ├── other.go
+    ├── securemem.go
+    ├── securemem_test.go
+    └── windows.go
 ```

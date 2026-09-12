@@ -872,7 +872,7 @@ func getInput(sess *core.Session, prompt string, hidden bool) ([]byte,func(), er
 		if b < 32 { continue }
 
 		// check the length limit
-		if pos+1 > 1024*8 { return nil,dealloc,errors.New("character limit exceeded (max 8kb)") }
+		if pos+1 > 1024*16 { return nil,dealloc,errors.New("character limit exceeded (max 16kb)") }
 
 		// store the key
 		inputBuf[pos] = b
@@ -1002,7 +1002,7 @@ func processSubstitution(sess *core.Session, input Token) ([]byte,func(), error)
 
 type AutoCompleter struct { sess *core.Session }
 
-// Do implements the readline.AutoCompleter interface directly
+// Do implements the readline.AutoCompleter interface
 func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, length int) {
 	lineStr := string(line[:pos]) // Get the everything until the cursor
 	
@@ -1014,7 +1014,12 @@ func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, lengt
 
 	// If we are typing the first word, complete the command itself
 	if len(args) == 1 {
-		cmds := []string{"help", "exit", "info", "put", "get", "rm", "update", "mv", "cd", "rmd", "ls", "lsall"}
+		cmds := []string{
+			"help", "exit",
+			"put", "mput", "get", "rm", "update", "mtime",
+			"mv", "cd", "rmd", "ls", "lsall",
+			"iter", "exec", "eval",
+		}
 		for _, cmd := range cmds {
 			if strings.HasPrefix(cmd, lineStr) {
 				// Append the remaining string for completion of the current types string
@@ -1034,7 +1039,7 @@ func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, lengt
 	switch cmd {
 	case "cd", "rmd", "ls", "lsall":
 		dirsOnly = true
-	case "get", "rm", "update", "mv":
+	case "get", "rm", "update", "mv", "mtime", "mput", "put":
 		dirsOnly = false
 	// For other things like shortcuts, complete everything
 	default: dirsOnly = false
@@ -1043,7 +1048,7 @@ func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, lengt
 	// Fetch dynamic completions
 	results := v.getCompletions(lastArg, dirsOnly)
 	
-	// Filter results to only those that match what the user typed and return the remaining possibilities
+	// Filter results to only those that match what we typed and return the remaining possibilities
 	for _, res := range results {
 		if strings.HasPrefix(res, lastArg) {
 			completionOpts = append(completionOpts, []rune(strings.TrimPrefix(res, lastArg)))
@@ -1054,7 +1059,6 @@ func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, lengt
 	return completionOpts, 0
 }
 
-// Updated helper logic attached to the struct
 func (v *AutoCompleter) getCompletions(line string, dirsOnly bool) []string {
 	dirPath := ""
 	

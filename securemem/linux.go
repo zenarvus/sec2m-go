@@ -29,7 +29,7 @@ func UnlockMemory(b []byte) error {
 
 // Alloc requests raw memory pages from the OS using mmap.
 // It applies madvise flags to prevent dumping/swapping behavior where possible.
-// Returns a deallocator function that should be used and called at somewhere
+// Returns a deallocator function that should be used to free the allocated memory
 func Alloc(size int, opts ...Option) ([]byte, func(), error) {
 	if size <= 0 { return nil,func(){}, fmt.Errorf("invalid allocation size: %d", size) }
 
@@ -51,7 +51,7 @@ func Alloc(size int, opts ...Option) ([]byte, func(), error) {
 	// Advise kernel to release pages eagerly when freed
 	_ = unix.Madvise(b, unix.MADV_NOHUGEPAGE)
 
-	// Lock to the RAM if it's explicitly enabled
+	// Lock to the RAM if it's enabled
 	if cfg.lock {
 		if err := unix.Mlock(b); err != nil {
 			// Unmap before returning to avoid leaking memory if locking fails
