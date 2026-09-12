@@ -645,7 +645,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 	case "exec":
 		if len(args) < 2 { return errors.New("Usage: exec <shell-command> <args>") }
 
-		// Create the command
+		// Create the command. This creates immutable strings from arguments. We must not pass secrets as arguments in here.
 		cmdArgs := make([]string, 0, len(args[1:]))
 		for i:=1; i < len(args); i++ {
 			cmdArgs = append(cmdArgs, string(args[i]))
@@ -815,7 +815,7 @@ func getInput(sess *core.Session, prompt string, hidden bool) ([]byte,func(), er
 	}()
 
 	// Allocate a 16 KB buffer for whole password input
-	// TODO: make this securemem.Buffer instead
+	// TODO: make this dynamically growing securemem.Buffer instead.
 	inputBuf,dealloc,err := securemem.Alloc(1024*16)
 	if err != nil {return nil, func(){},err}
 

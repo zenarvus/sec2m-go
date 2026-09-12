@@ -18,9 +18,7 @@
 
 **>** Whole file HMAC integrity check using the Encrypt-Then-MAC scheme
 
-**>** Additional per-value encryption for in-memory security and hardening against unprivileged same UID malware, along with core-dumping prevention (android & linux) and memory locking for the session key (windows, darwin, linux & android) on supported platforms
-
-**>** Per-Session-Key to store encryption and signature keys encrypted on memory
+**>** Per-session key to store encryption and signature keys encrypted on memory and additional per-value encryption for in-memory security, along with core-dumping prevention (android & linux) and memory locking for the session key (windows, darwin, linux & android) on supported platforms
 
 **>** Secret zeroing and deallocation after usage whenever possible
 
@@ -35,7 +33,7 @@
 **>** TOTP, Clipboard copy/clearing, password generation, commit signing and more with helper scripts
 
 ## Installation
-Sec2M is a single binary application with no external runtime dependencies nor config files. You just need go and git to install it.
+Sec2M is a single binary application with no external runtime dependencies nor config files. You can install the prebuild binaries from [releases](https://github.com/zenarvus/sec2m-go/releases) or build it using the following command (requires go >= 1.26.3 and git):
 
 ```bash
 git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build .
@@ -192,11 +190,12 @@ To import everything from flat list, use the following command in shell:
 `migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to a flat list. Then, you can use the command above to import it.
 
 > [!NOTE]
-> It's actually a go code wrapped in a shell script. Make sure you installed go. 
+> It's actually a go code wrapped in a shell script (because shell scripts are cooler). So make sure you installed go. 
 
 ## Hardening Guide Against Same UID Malware
 
-> [!NOTE] Some of those elements are Linux only.
+> [!NOTE]
+> Some of those elements are Linux only.
 
 **>** **NEVER** pass an entry value to an external script as positional arguments! Always pass it via stdin or use the given input prompt instead. Positional arguments will be visible to other processes and will leak your secrets.
 
@@ -210,9 +209,11 @@ To import everything from flat list, use the following command in shell:
 
 **>** Prefer `helpers.sh/spitter.sh` instead of using clipboard. Clipboard is insecure as it's accessible by any process. `helpers.sh/spitter.sh` requires a malware to open a focused window to capture the secrets.
 
-**>** A malware can modify your `.profile` and `ashrc` (or whatever) to make you use a fake, malicious sec2m binary and enter your password there. To prevent that, these and the directory containing them must not be writable by your user. Make them owned by root and give your user only the permission to read.
+**>** A malware can modify your `.profile` and `.ashrc` (or whatever shell environment you use) to make you use a fake, malicious sec2m binary and enter your password there. To prevent that, these and the directory containing them must not be writable by your user. Make them owned by root and give your user only the permission to read.
 
-**>** Do not run a malware that is potentially capable of doing these at the first place. Use bubblewrap sandboxing for suspicious apps. For example, firefox should not be able to modify your `.profile`
+**>** Do not run a malware that is potentially capable of doing these at the first place. Use bubblewrap sandboxing for suspicious apps. For example, firefox should not be able to modify your `.profile`.
+
+**>** Consider it as a game-over if you somehow run an unsandboxed malware. Change your secrets and your password for the vault.
 
 > [!NOTE]
 > It's relatively okay to use positional arguments in the long lived shell session FOR internal vault commands. They wont leak, but wont securely wiped from memory either.

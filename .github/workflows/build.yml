@@ -1,0 +1,126 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+  pull_request:
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            artifact: sec2m-linux-amd64
+
+          - goarch: arm64
+            artifact: sec2m-linux-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+
+          go build \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags="-s -w" \
+            -o "dist/${{ matrix.artifact }}" \
+            .
+
+      - name: Verify binary
+        run: |
+          file "dist/${{ matrix.artifact }}"
+
+          test -x "dist/${{ matrix.artifact }}"
+
+          echo "Binary:"
+          ls -lh "dist/${{ matrix.artifact }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download AMD64
+        uses: actions/download-artifact@v4
+        with:
+          name: sec2m-linux-amd64
+          path: release
+
+      - name: Download ARM64
+        uses: actions/download-artifact@v4
+        with:
+          name: sec2m-linux-arm64
+          path: release
+
+      - name: Generate checksums
+        working-directory: release
+        run: |
+          sha256sum * > SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/sec2m-linux-amd64
+            release/sec2m-linux-arm64
+            release/SHA256SUMS
+          generate_release_notes: true
