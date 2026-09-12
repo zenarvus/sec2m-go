@@ -182,7 +182,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		err = processPipeline(sess, cmdArgs, bytes.NewReader(nil), os.Stdout)
+		err = processPipeline(sess, cmdArgs, bytes.NewReader(nil), os.Stdout, true)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
@@ -272,14 +272,13 @@ func startShell(sess *core.Session) error {
 			}
 		}
 
-		err = processPipeline(sess, args, bytes.NewReader(nil), os.Stdout)
+		err = processPipeline(sess, args, bytes.NewReader(nil), os.Stdout, true)
 		if err != nil { fmt.Println(err); continue }
 	}
 }
 
 func processPipeline(
-	sess *core.Session, tokens []Token, stdin io.Reader, finalStdout io.Writer,
-) (error) {
+	sess *core.Session, tokens []Token, stdin io.Reader, finalStdout io.Writer, toTerminal bool) (error) {
 	defer func(){
 		// explicit zeroing after usage
 		for _,token := range tokens { securemem.ZeroBytes(token.Value) }
@@ -339,12 +338,12 @@ func processPipeline(
 		prevStdoutBuf.Dealloc()
 		prevStdoutBuf = buf // make the prevStdout the stdout buffer
 
-		// If we are at the last command, add a newline to the currentStdout.
-		// readline will replace this newline with the prompt. Otherwise, it will replace the last line in stdout
-		if i == len(commandlist)-1 { currentStdout.Write([]byte("\n")) }
-
 		currentStdin = buf // update stdin to the buffer. Things we write to currentStdout buf will be used as the stdin on the next command.
 	}
+
+	// If we are expected to write to the terminal, add a newline to the currentStdout.
+	// readline will replace this newline with the prompt. Otherwise, it will replace the last line in stdout
+	if toTerminal { currentStdout.Write([]byte("\n")) }
 
 	return nil
 }
@@ -673,7 +672,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		cmdArgs, err := tokenize(cmd)
 		if err != nil { return err }
 
-		return processPipeline(sess, cmdArgs, bytes.NewReader(nil), stdout)
+		return processPipeline(sess, cmdArgs, bytes.NewReader(nil), stdout, false)
 
 	// Read the stdin, split it with the given delimiter, iterate through them and execute the provided command in every iteration
 	case "iter":
@@ -691,7 +690,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			cmd, err := tokenize(args[1])
 			if err != nil {return err}
 
-			err = processPipeline(sess, cmd, bytes.NewReader(line), stdout)
+			err = processPipeline(sess, cmd, bytes.NewReader(line), stdout, false)
 			if err != nil {return err}
 		}
 
@@ -753,7 +752,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 				return fmt.Errorf("shortcut expansion error: %w", err)
 			}
 
-			return processPipeline(sess, expandedArgs, stdin, stdout)
+			return processPipeline(sess, expandedArgs, stdin, stdout, false)
 		}
 	}
 
@@ -991,7 +990,7 @@ func processSubstitution(sess *core.Session, input Token) ([]byte,func(), error)
 		if err != nil {return nil,func(){}, err}
 
 		var buf = &securemem.Buffer{}
-		err = processPipeline(sess, cmdArgs, bytes.NewReader(nil), buf)
+		err = processPipeline(sess, cmdArgs, bytes.NewReader(nil), buf, false)
 		if err != nil { return nil,func(){}, err }
 
 		return buf.Bytes(),func(){buf.Dealloc()},nil
