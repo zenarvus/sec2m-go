@@ -312,6 +312,7 @@ func processPipeline(
 	var currentStdout io.Writer
 
 	var prevStdoutBuf = &securemem.Buffer{} // the previous stdout buffer. It's used as stdin in the next command
+	defer prevStdoutBuf.Dealloc()
 
 	for i, commandArgs := range commandlist {
 		if len(commandArgs) == 0 { continue }
@@ -327,8 +328,9 @@ func processPipeline(
 		}
 
 		// Process the substitutions and return an array of []byte as args
-		args,err := processAllSubstitutions(sess, commandArgs)
+		args,deallocS,err := processAllSubstitutions(sess, commandArgs)
 		if err != nil {return err}
+		defer deallocS()
 
 		err = processCommand(sess, currentStdin, currentStdout, args)
 		if err != nil { return err }
@@ -925,7 +927,7 @@ func getArgs(
 		deallocChain = append(deallocChain, func() { securemem.ZeroBytes(stdinBytes) })
 
 		if len(stdinBytes) > 0 {
-			stdinArgs = bytes.Split(stdinBytes, []byte{'\n'})
+			stdinArgs = bytes.Split(stdinBytes, []byte{'\n'}) // bytes.Split does not copy the bytes
 		}
 
 		// Give error if stdinArgs has not enough arguments to satisfy requiredArgsLeft
@@ -964,31 +966,37 @@ func getArgs(
 
 ////////////////////////////////////////////////////////
 
-func processAllSubstitutions(sess *core.Session, tokens []Token) ([][]byte, error) {
+func processAllSubstitutions(sess *core.Session, tokens []Token) ([][]byte,func(), error) {
 	var expanded [][]byte
+	var deallocChain []func()
+
+	deallocAll := func(){
+		for _,dealloc := range deallocChain { dealloc() }
+	}
 
 	for _,token := range tokens {
-		exp, err := processSubstitution(sess, token)
-		if err != nil { return nil, err }
+		exp,dealloc, err := processSubstitution(sess, token)
+		if err != nil { return nil,deallocAll, err }
+		deallocChain = append(deallocChain, dealloc)
 		expanded = append(expanded, exp)
 	}
-	return expanded, nil
+	return expanded,deallocAll, nil
 }
 
 // Get the substitution token, tokenize it's value, process the pipeline and return the value
-func processSubstitution(sess *core.Session, input Token) ([]byte, error) {
+func processSubstitution(sess *core.Session, input Token) ([]byte,func(), error) {
 	if input.Type == SUBSTITUTION {
 
 		cmdArgs,err := tokenize(input.Value)
-		if err != nil {return nil, err}
+		if err != nil {return nil,func(){}, err}
 
-		var buf = &bytes.Buffer{}
+		var buf = &securemem.Buffer{}
 		err = processPipeline(sess, cmdArgs, bytes.NewReader(nil), buf)
-		if err != nil { return nil, err }
+		if err != nil { return nil,func(){}, err }
 
-		return buf.Bytes(),nil
+		return buf.Bytes(),func(){buf.Dealloc()},nil
 
-	} else { return input.Value, nil }
+	} else { return input.Value,func(){securemem.ZeroBytes(input.Value)}, nil }
 }
 
 ///////////////////////////////////////////////////////

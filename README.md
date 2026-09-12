@@ -18,11 +18,9 @@
 
 **>** Whole file HMAC integrity check using the Encrypt-Then-MAC scheme
 
-**>** Additional per-value encryption for in-memory security
+**>** Additional per-value encryption for in-memory security and hardening against unprivileged same UID malware, along with core-dumping prevention (android & linux) and memory locking for the session key (windows, darwin, linux & android) on supported platforms
 
 **>** Per-Session-Key to store encryption and signature keys encrypted on memory
-
-**>** Core-dumping prevention (android & linux) and memory locking for the session key (windows, darwin, linux & android) on supported platforms
 
 **>** Secret zeroing and deallocation after usage whenever possible
 
@@ -194,14 +192,30 @@ To import everything from flat list, use the following command in shell:
 `migration.sh` folder contains a `flatten-kdbx.sh <xmlfilepath>` script that converts a kdbx xml export to a flat list. Then, you can use the command above to import it.
 
 > [!NOTE]
-> It's actually a go code wrapped in a shell script. Make sure you installed go.
+> It's actually a go code wrapped in a shell script. Make sure you installed go. 
 
-## Dos and Nos
-> [!CAUTION]
-> **NEVER** pass an entry value to an external script as positional arguments! Always pass it via stdin instead. Positional arguments will be visible to other processes and will leak your secrets.
+## Hardening Guide Against Same UID Malware
+
+> [!NOTE] Some of those elements are Linux only.
+
+**>** **NEVER** pass an entry value to an external script as positional arguments! Always pass it via stdin or use the given input prompt instead. Positional arguments will be visible to other processes and will leak your secrets.
+
+**>** Use Wayland instead of X11. It prevents other processes from keylogging your inputs and stealing your master key.
+
+**>** Set `ptrace_scope` to `1`. It prevents unrelated processes from attaching debuggers or analyzing the memory of others processes.
+
+**>** Place helper scripts to a directory owned by root and disable write permissions for them. A malware must not be able to modify the helpers you execute in the vault. Otherwise, they can make those scripts steal your secrets.
+
+**>** Use absolute paths for helpers when calling them. This prevents a malware from modifying PATH variable and make you actually execute a malicious script.
+
+**>** Prefer `helpers.sh/spitter.sh` instead of using clipboard. Clipboard is insecure as it's accessible by any process. `helpers.sh/spitter.sh` requires a malware to open a focused window to capture the secrets.
+
+**>** A malware can modify your `.profile` and `ashrc` (or whatever) to make you use a fake, malicious sec2m binary and enter your password there. To prevent that, these and the directory containing them must not be writable by your user. Make them owned by root and give your user only the permission to read.
+
+**>** Do not run a malware that is potentially capable of doing these at the first place. Use bubblewrap sandboxing for suspicious apps. For example, firefox should not be able to modify your `.profile`
 
 > [!NOTE]
-> Positional arguments passed to internal commands in shell session will be hidden to other processes. Meaning, you can pass entry values to them relatively securely, but they will be visible in session history. Try to prefer providing them as stdin or via provided input request.
+> It's relatively okay to use positional arguments in the long lived shell session FOR internal vault commands. They wont leak, but wont securely wiped from memory either.
 
 ## SDB Format
 ```go

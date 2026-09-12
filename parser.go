@@ -50,6 +50,7 @@ func tokenize(input []byte) ([]Token, error) {
 		parenCount int // The parenthesis count used in command substitutions
 		scratch securemem.Buffer
 	)
+	defer scratch.Dealloc()
 
 	// Add the generated token to tokens list and empty token variable for the next token
 	emit := func() {
