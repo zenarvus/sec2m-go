@@ -51,7 +51,7 @@ case "$1" in
         VAULT_PID=$! # get the pid of the sub shell
         echo "$VAULT_PID" > "$PID_FILE" # write the pid to the pid file
 
-        echo "secret stored in PID $VAULT_PID for 20 seconds"
+        printf "secret stored in PID $VAULT_PID for 20 seconds"
         ;;
 
     spit)
@@ -63,6 +63,6 @@ case "$1" in
         ;;
 
     *)
-        echo "Usage: $0 {load|spit}"
+        printf "Usage: $0 {load|spit}"
         ;;
 esac

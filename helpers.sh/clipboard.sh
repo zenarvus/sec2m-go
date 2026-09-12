@@ -18,7 +18,7 @@ touch /tmp/clipman-nostore.tmp
 # Copy the data to the Wayland clipboard
 printf '%s' "$data" | wl-copy
 
-echo "Copied to clipboard and will be cleared after 10 seconds."
+printf "Copied to clipboard and will be cleared after 10 seconds."
 
 # Spawn a background process to clear the clipboard after 10 seconds
 #

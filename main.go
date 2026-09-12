@@ -29,7 +29,6 @@ import (
 	"os/signal"
 	"path"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -285,8 +284,6 @@ func processPipeline(
 		// explicit zeroing after usage
 		for _,token := range tokens { securemem.ZeroBytes(token.Value) }
 	}()
-	
-	defer runtime.GC() // manual garbage collection to cleanup whatever mess we created
 
 	// commants split using "|"
 	var commandlist [][]Token
@@ -313,19 +310,20 @@ func processPipeline(
 	var currentStdin = stdin
 
 	var currentStdout io.Writer
-	var nextStdin io.Reader
+
+	var prevStdoutBuf = &securemem.Buffer{} // the previous stdout buffer. It's used as stdin in the next command
 
 	for i, commandArgs := range commandlist {
 		if len(commandArgs) == 0 { continue }
+
+		var buf = &securemem.Buffer{}
 
 		// If we are at the last command, make the stdout the final stdout
 		if i == len(commandlist)-1 {
 			currentStdout = finalStdout
 		// Else, make it a buffer
 		} else {
-			var buf = &bytes.Buffer{}
 			currentStdout = buf
-			nextStdin = buf // We also write to next stdin and pass it as stdin to the next command
 		}
 
 		// Process the substitutions and return an array of []byte as args
@@ -335,11 +333,15 @@ func processPipeline(
 		err = processCommand(sess, currentStdin, currentStdout, args)
 		if err != nil { return err }
 
+		// clear the previous stdout
+		prevStdoutBuf.Dealloc()
+		prevStdoutBuf = buf // make the prevStdout the stdout buffer
+
 		// If we are at the last command, add a newline to the currentStdout.
 		// readline will replace this newline with the prompt. Otherwise, it will replace the last line in stdout
 		if i == len(commandlist)-1 { currentStdout.Write([]byte("\n")) }
 
-		currentStdin = nextStdin // update stdin to next stdin
+		currentStdin = buf // update stdin to the buffer. Things we write to currentStdout buf will be used as the stdin on the next command.
 	}
 
 	return nil
@@ -810,8 +812,9 @@ func getInput(sess *core.Session, prompt string, hidden bool) ([]byte,func(), er
 		os.Exit(1)
 	}()
 
-	// Allocate a 8 KB buffer for whole password input
-	inputBuf,dealloc,err := securemem.Alloc(1024*8)
+	// Allocate a 16 KB buffer for whole password input
+	// TODO: make this securemem.Buffer instead
+	inputBuf,dealloc,err := securemem.Alloc(1024*16)
 	if err != nil {return nil, func(){},err}
 
 	pos := 0 // the position in the input buffer. The length of the byte array

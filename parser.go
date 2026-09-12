@@ -48,7 +48,7 @@ func tokenize(input []byte) ([]Token, error) {
 		inQuote byte = '0' // Are we in a quote? It's the quote char used if we are in one.
 		escaped bool // Is the current character escaped? (via "\")
 		parenCount int // The parenthesis count used in command substitutions
-		scratch bytes.Buffer
+		scratch securemem.Buffer
 	)
 
 	// Add the generated token to tokens list and empty token variable for the next token
@@ -60,7 +60,6 @@ func tokenize(input []byte) ([]Token, error) {
 
 			token.Type = ARG // reset the token type
 			token.Value = []byte{} // reset the value field
-			securemem.ZeroBytes(scratch.Bytes()) // zero the scratch bytes
 			scratch.Reset() // reset the scratch
 		}
 	}
