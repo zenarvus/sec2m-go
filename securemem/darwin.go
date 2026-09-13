@@ -9,18 +9,18 @@ import (
 
 func Setup() error { return nil }
 
-func LockMemory(b []byte) error {
-    if len(b) == 0 { return nil }
-    return unix.Mlock(b)
+func LockMemory(b ByteSlice) error {
+    if len(b.Bytes) == 0 { return nil }
+    return unix.Mlock(b.Bytes)
 }
 
-func UnlockMemory(b []byte) error {
-    if len(b) == 0 { return nil }
-    return unix.Munlock(b)
+func UnlockMemory(b ByteSlice) error {
+    if len(b.Bytes) == 0 { return nil }
+    return unix.Munlock(b.Bytes)
 }
 
-func Alloc(size int, opts ...Option) ([]byte, func(), error) {
-    if size <= 0 { return nil, func(){}, fmt.Errorf("invalid allocation size: %d", size) }
+func Alloc(size int, opts ...Option) (ByteSlice, error) {
+    if size <= 0 { return ByteSlice{}, fmt.Errorf("invalid allocation size: %d", size) }
 
     cfg := &config{lock: false}
     for _, opt := range opts { opt(cfg) }
@@ -32,27 +32,37 @@ func Alloc(size int, opts ...Option) ([]byte, func(), error) {
         unix.PROT_READ|unix.PROT_WRITE,
         unix.MAP_PRIVATE|unix.MAP_ANON,
     )
-    if err != nil { return nil, func(){}, fmt.Errorf("mmap failed: %w", err) }
+    if err != nil { return ByteSlice{}, fmt.Errorf("mmap failed: %w", err) }
 
     if cfg.lock {
         if err := unix.Mlock(b); err != nil {
             _ = unix.Munmap(b)
-            return nil, func(){}, fmt.Errorf("mlock failed: %w", err)
+            return ByteSlice{}, fmt.Errorf("mlock failed: %w", err)
         }
     }
 
-    return b, func() { dealloc(b) }, nil
+	slice := &ByteSlice{
+		Bytes: b,
+		freed: false,
+	}
+	slice.Dealloc = func()error{ return dealloc(slice) }
+
+	return *slice, nil
 }
 
-func dealloc(b []byte) error {
-    if len(b) == 0 { return nil }
+func dealloc(b *ByteSlice) error {
+	if b == nil || b.freed {return nil}
+    if len(b.Bytes) == 0 { b.freed = true; return nil }
 
-    ZeroBytes(b)
-    _ = unix.Munlock(b)
-    _ = unix.Madvise(b, unix.MADV_DONTNEED)
+    ZeroBytes(b.Bytes)
+    _ = unix.Munlock(b.Bytes)
+    _ = unix.Madvise(b.Bytes, unix.MADV_DONTNEED)
 
-    if err := unix.Munmap(b); err != nil { 
+    if err := unix.Munmap(b.Bytes); err != nil { 
         return fmt.Errorf("munmap failed: %w", err) 
     }
+
+	b.freed = true
+
     return nil
 }

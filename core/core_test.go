@@ -70,20 +70,20 @@ func TestLowLevelEncryption(t *testing.T) {
 
 	for _, tc := range algorithms {
 		t.Run(tc.name, func(t *testing.T) {
-			nonce, ciphertext, err := encryptData(plaintext, key, tc.algo)
+			nonce, ciphertext, err := encryptData(plaintext, securemem.ToByteSlice(bytes.Clone(key)), tc.algo)
 			if err != nil {
 				t.Fatalf("encryptData failed: %v", err)
 			}
 
-			decrypted,dealloc, err := unencryptData(ciphertext, nonce, key, tc.algo)
+			decrypted, err := unencryptData(ciphertext, nonce, securemem.ToByteSlice(bytes.Clone(key)), tc.algo)
+			defer decrypted.Dealloc()
 			if err != nil {
 				t.Fatalf("unencryptData failed: %v", err)
 			}
 
-			if !bytes.Equal(plaintext, decrypted) {
-				t.Errorf("Decrypted data mismatch. Got %s, expected %s", decrypted, plaintext)
+			if !bytes.Equal(plaintext, decrypted.Bytes) {
+				t.Errorf("Decrypted data mismatch. Got %s, expected %s", decrypted.Bytes, plaintext)
 			}
-			dealloc()
 		})
 	}
 }
@@ -94,7 +94,7 @@ func TestInitAndLoadSession(t *testing.T) {
 	vaultPath := filepath.Join(dir, "test_vault.sdb")
 
 	// Initialize vault session
-	sess, err := InitSession(vaultPath, []byte(testPassword), testFastKDParams, "aes-cbc-256", "sha2-256")
+	sess, err := InitSession(vaultPath, securemem.ToByteSlice([]byte(testPassword)), testFastKDParams, "aes-cbc-256", "sha2-256")
 	if err != nil {
 		t.Fatalf("InitSession failed: %v", err)
 	}
@@ -111,17 +111,17 @@ func TestInitAndLoadSession(t *testing.T) {
 	if err := os.WriteFile(lockPath, []byte("lock"), 0600); err != nil {
 		t.Fatalf("Failed to create dummy lock file: %v", err)
 	}
-	_, err = InitSession(vaultPath, []byte(testPassword), testFastKDParams, "aes-cbc-256", "sha2-256")
+	_, err = InitSession(vaultPath, securemem.ToByteSlice([]byte(testPassword)), testFastKDParams, "aes-cbc-256", "sha2-256")
 	if err == nil { t.Errorf("Expected InitSession to fail when lock file already exists") }
 	os.Remove(lockPath)
 
 	// Load session with correct password
-	loadedSess, err := LoadSession(vaultPath, []byte(testPassword))
+	loadedSess, err := LoadSession(vaultPath, securemem.ToByteSlice([]byte(testPassword)))
 	if err != nil { t.Fatalf("LoadSession failed with correct password: %v", err) }
 	loadedSess.Destroy()
 
 	// Load session with incorrect password
-	_, err = LoadSession(vaultPath, []byte("WrongPassword"))
+	_, err = LoadSession(vaultPath, securemem.ToByteSlice([]byte("WrongPassword")))
 	if err == nil { t.Errorf("Expected LoadSession to fail with wrong password") }
 }
 
@@ -130,36 +130,36 @@ func TestSessionEntryCRUD(t *testing.T) {
 	dir := t.TempDir()
 	vaultPath := filepath.Join(dir, "crud_vault.sdb")
 
-	sess, err := InitSession(vaultPath, []byte(testPassword), testFastKDParams, "xchacha20", "sha3-256")
+	sess, err := InitSession(vaultPath, securemem.ToByteSlice([]byte(testPassword)), testFastKDParams, "xchacha20", "sha3-256")
 	if err != nil { t.Fatalf("InitSession failed: %v", err) }
 	defer sess.Destroy()
 
 	// Put
 	key := "/services/db/password"
-	val := []byte("mypassword123") // we clone it because sess zeroes it after insertion
-	if err := sess.Put(key, nil, bytes.Clone(val)); err != nil {
+	val := []byte("mypassword123") // we do bytes.Clone because ToByteSlice zeroes the byte
+	if err := sess.Put(key, nil, securemem.ToByteSlice(bytes.Clone(val))); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
 	// Get
-	gotVal,deallocVal,err := sess.Get(key)
+	gotVal,err := sess.Get(key)
+	defer gotVal.Dealloc()
 	if err != nil { t.Fatalf("Get failed: %v", err) }
-	if !bytes.Equal(gotVal, []byte("mypassword123")) {
-		t.Errorf("Get returned %s, expected mypassword123", gotVal)
+	if !bytes.Equal(gotVal.Bytes, []byte("mypassword123")) {
+		t.Errorf("Get returned %s, expected mypassword123", gotVal.Bytes)
 	}
-	deallocVal()
 
 	// Update
 	newVal := []byte("updated_password_456")
-	if err := sess.Update(key, bytes.Clone(newVal)); err != nil { t.Fatalf("Update failed: %v", err) }
+	if err := sess.Update(key, securemem.ToByteSlice(bytes.Clone(newVal))); err != nil { t.Fatalf("Update failed: %v", err) }
 
-	gotVal,deallocVal,err = sess.Get(key)
+	gotVal,err = sess.Get(key)
+	defer gotVal.Dealloc()
 	if err != nil { t.Fatalf("Get after update failed: %v", err) }
 
-	if !bytes.Equal(gotVal, newVal) {
-		t.Errorf("Get after update returned %s, expected %s", gotVal, newVal)
+	if !bytes.Equal(gotVal.Bytes, newVal) {
+		t.Errorf("Get after update returned %s, expected %s", gotVal.Bytes, newVal)
 	}
-	deallocVal()
 
 	// Move (Mv)
 	newKey := "/services/db/master_password"
@@ -168,22 +168,22 @@ func TestSessionEntryCRUD(t *testing.T) {
 	}
 
 	// Old key should be gone
-	if _,_,err := sess.Get(key); err == nil {
+	if _,err := sess.Get(key); err == nil {
 		t.Errorf("Expected error getting moved old key, got nil")
 	}
 
 	// New key should exist
-	gotVal,deallocVal, err = sess.Get(newKey)
-	if err != nil || !bytes.Equal(gotVal, newVal) {
+	gotVal, err = sess.Get(newKey)
+	defer gotVal.Dealloc()
+	if err != nil || !bytes.Equal(gotVal.Bytes, newVal) {
 		t.Errorf("Get moved key failed or value mismatched: %v", err)
 	}
-	deallocVal()
 
 	// Remove (Rm)
 	if err := sess.Rm(newKey); err != nil {
 		t.Fatalf("Rm failed: %v", err)
 	}
-	if _,_, err := sess.Get(newKey); err == nil {
+	if _, err := sess.Get(newKey); err == nil {
 		t.Errorf("Expected error getting removed key, got nil")
 	}
 }
@@ -193,7 +193,7 @@ func TestSessionNavigationAndListing(t *testing.T) {
 	dir := t.TempDir()
 	vaultPath := filepath.Join(dir, "nav_vault.sdb")
 
-	sess, err := InitSession(vaultPath, []byte(testPassword), testFastKDParams, "aes-cbc-256", "blake3-256")
+	sess, err := InitSession(vaultPath, securemem.ToByteSlice([]byte(testPassword)), testFastKDParams, "aes-cbc-256", "blake3-256")
 	if err != nil {
 		t.Fatalf("InitSession failed: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestSessionNavigationAndListing(t *testing.T) {
 	}
 
 	for k, v := range entries {
-		if err := sess.Put(k, nil, []byte(v)); err != nil {
+		if err := sess.Put(k, nil, securemem.ToByteSlice([]byte(v))); err != nil {
 			t.Fatalf("Failed to put key %s: %v", k, err)
 		}
 	}
@@ -239,7 +239,7 @@ func TestSessionNavigationAndListing(t *testing.T) {
 
 	// Test Rmd
 	if err := sess.Rmd("/env/dev/"); err != nil { t.Fatalf("Rmd failed: %v", err) }
-	if _,_,err := sess.Get("/env/dev/db"); err == nil {
+	if _,err := sess.Get("/env/dev/db"); err == nil {
 		t.Errorf("Expected key /env/dev/db to be removed after Rmd")
 	}
 }
@@ -250,12 +250,12 @@ func TestVaultChange(t *testing.T) {
 	vaultPath := filepath.Join(dir, "change_vault.sdb")
 
 	// Create vault with AES-CBC-256 and SHA2-256
-	sess, err := InitSession(vaultPath, []byte(testPassword), testFastKDParams, "aes-cbc-256", "sha2-256")
+	sess, err := InitSession(vaultPath, securemem.ToByteSlice([]byte(testPassword)), testFastKDParams, "aes-cbc-256", "sha2-256")
 	if err != nil { t.Fatalf("InitSession failed: %v", err) }
 
 	key := "/secret/token"
 	val := []byte("super-secret-token")
-	if err := sess.Put(key, nil, bytes.Clone(val)); err != nil {
+	if err := sess.Put(key, nil, securemem.ToByteSlice(bytes.Clone(val))); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 	if err := sess.Save(); err != nil {
@@ -264,8 +264,8 @@ func TestVaultChange(t *testing.T) {
 
 	// Change password and cipher suite to XChaCha20 and SHA3-256
 	err = sess.VaultChange(
-		[]byte(testPassword),
-		[]byte(testNewPassword),
+		securemem.ToByteSlice([]byte(testPassword)),
+		securemem.ToByteSlice([]byte(testNewPassword)),
 		testFastKDParams,
 		"xchacha20", "sha3-256",
 	)
@@ -273,18 +273,18 @@ func TestVaultChange(t *testing.T) {
 	sess.Destroy()
 
 	// Ensure original password can no longer load the file
-	_, err = LoadSession(vaultPath, []byte(testPassword))
+	_, err = LoadSession(vaultPath, securemem.ToByteSlice([]byte(testPassword)))
 	if err == nil { t.Errorf("Expected error when loading vault with old password after VaultChange") }
 
 	// Load vault with new password and verify secret contents
-	newSess, err := LoadSession(vaultPath, []byte(testNewPassword))
+	newSess, err := LoadSession(vaultPath, securemem.ToByteSlice([]byte(testNewPassword)))
 	if err != nil { t.Fatalf("LoadSession failed with new password: %v", err) }
 	defer newSess.Destroy()
 
-	retrievedVal,dealloc,err := newSess.Get(key)
+	retrievedVal,err := newSess.Get(key)
+	defer retrievedVal.Dealloc()
 	if err != nil { t.Fatalf("Get key after VaultChange failed: %v", err) }
-	if !bytes.Equal(retrievedVal, val) {
-		t.Errorf("Retrieved value mismatch. Got %s, expected %s", retrievedVal, val)
+	if !bytes.Equal(retrievedVal.Bytes, val) {
+		t.Errorf("Retrieved value mismatch. Got %s, expected %s", retrievedVal.Bytes, val)
 	}
-	dealloc()
 }

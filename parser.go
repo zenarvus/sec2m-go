@@ -19,7 +19,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package main
 
 import (
-	"bytes"
 	"errors"
 
 	"github.com/zenarvus/sec2m-go/securemem"
@@ -38,10 +37,11 @@ const(
 
 type Token struct {
 	Type TokenType
-	Value []byte
+	Value securemem.ByteSlice
 }
 
-func tokenize(input []byte) ([]Token, error) {
+// TODO: Implement a securemem.Clone() that generates a copy of a *securemem.ByteSlice
+func tokenize(input securemem.ByteSlice) ([]Token, error) {
 	var (
 		tokens []Token // The token list that will be returned
 		token Token // the current token. Defaults to ARG and an empty Value buffer
@@ -56,18 +56,18 @@ func tokenize(input []byte) ([]Token, error) {
 	emit := func() {
 		// If token length is greater than zero, or token type is substitution, add it to the arguments list
 		if scratch.Len() > 0 || token.Type == SUBSTITUTION {
-			token.Value = bytes.Clone(scratch.Bytes()) // We need to clone it as scratch.Reset() reuses the same slice
+			token.Value = securemem.Clone(scratch.Bytes()) // We need to clone it as scratch.Reset() reuses the same slice
 			tokens = append(tokens, token) // append the token
 
 			token.Type = ARG // reset the token type
-			token.Value = []byte{} // reset the value field
+			token.Value = securemem.ByteSlice{} // reset the value field
 			scratch.Reset() // reset the scratch
 		}
 	}
 
 	// Iterate through the input bytes
-	for i := 0; i < len(input); i++ {
-		b := input[i] // the current byte in the input
+	for i := 0; i < len(input.Bytes); i++ {
+		b := input.Bytes[i] // the current byte in the input
 
 		// ESCAPE HANDLING
 
@@ -144,7 +144,7 @@ func tokenize(input []byte) ([]Token, error) {
 		// If it's a command substitution starter char
 		case '$':
 			// If the next character is parenthesis, make the token SUBSTITUTION
-			if i+1 < len(input) && input[i+1] == '(' {
+			if i+1 < len(input.Bytes) && input.Bytes[i+1] == '(' {
 				token.Type = SUBSTITUTION
 				parenCount = 1 // Make the parenthesis count 1
 				i++ // Skip the starting parenthesis

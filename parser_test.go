@@ -21,6 +21,8 @@ package main
 import (
 	"fmt"
 	"testing"
+
+	"github.com/zenarvus/sec2m-go/securemem"
 )
 
 type expectedToken struct {
@@ -103,7 +105,7 @@ func TestTokenize(t *testing.T) {
 
 	for i, tt := range tests {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			tokens, err := tokenize([]byte(tt.input))
+			tokens, err := tokenize(securemem.ToByteSlice([]byte(tt.input)))
 
 			// Check error expectations
 			if (err != nil) != tt.expectError {
@@ -126,7 +128,7 @@ func TestTokenize(t *testing.T) {
 					t.Errorf("token %d: expected type %d, got %d", i, expectedTok.Type, tok.Type)
 				}
 				
-				actualVal := string(tok.Value)
+				actualVal := string(tok.Value.Bytes)
 				if actualVal != expectedTok.Value {
 					t.Errorf("token %d: expected value %q, got %q", i, expectedTok.Value, actualVal)
 				}

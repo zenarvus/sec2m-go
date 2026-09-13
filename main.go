@@ -74,15 +74,15 @@ func main() {
 
 		vaultPath := getVaultPath()
 
-		pw,dealloc1,err := getInput(nil, "set password: ", true)
-		defer dealloc1()
+		pw,err := getInput(nil, "set password: ", true)
+		defer pw.Dealloc()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
 
-		pwAgain,dealloc2,err := getInput(nil, "repeat: ", true)
-		defer dealloc2()
+		pwAgain,err := getInput(nil, "repeat: ", true)
+		defer pwAgain.Dealloc()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
 
-		if !bytes.Equal(pw, pwAgain) {
+		if !bytes.Equal(pw.Bytes, pwAgain.Bytes) {
 			fmt.Println("Passwords do not match")
 			os.Exit(1)
 		}
@@ -104,19 +104,19 @@ func main() {
 			os.Exit(1)
 		}
 
-		oldpw,dealloc1,err := getInput(nil, "old password: ", true)
-		defer dealloc1()
+		oldpw,err := getInput(nil, "old password: ", true)
+		defer oldpw.Dealloc()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
 
-		newpw,dealloc2,err := getInput(nil, "new password: ", true)
-		defer dealloc2()
+		newpw,err := getInput(nil, "new password: ", true)
+		defer newpw.Dealloc()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
 
-		newpwagain,dealloc3,err := getInput(nil, "repeat: ", true)
-		defer dealloc3()
+		newpwagain,err := getInput(nil, "repeat: ", true)
+		defer newpwagain.Dealloc()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
 
-		if !bytes.Equal(newpw, newpwagain) {
+		if !bytes.Equal(newpw.Bytes, newpwagain.Bytes) {
 			fmt.Println("Passwords do not match")
 			os.Exit(1)
 		}
@@ -141,8 +141,8 @@ func main() {
 	case "shell":
 		vaultPath := getVaultPath()
 
-		pw,dealloc,err := getInput(nil, "password: ", true)
-		defer dealloc()
+		pw,err := getInput(nil, "password: ", true)
+		defer pw.Dealloc()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
 
 		sess, err := core.LoadSession(vaultPath, pw)
@@ -160,8 +160,8 @@ func main() {
 	case "shot":
 		vaultPath := getVaultPath()
 
-		pw,dealloc,err := getInput(nil, "password: ", true)
-		defer dealloc()
+		pw,err := getInput(nil, "password: ", true)
+		defer pw.Dealloc()
 		if err != nil{fmt.Println(err); os.Exit(1)}
 
 		sess, err := core.LoadSession(vaultPath, pw)
@@ -176,7 +176,8 @@ func main() {
 			os.Exit(1)
 		}
 
-		cmdArgs,err := tokenize([]byte(os.Args[2]))
+		// go strings are immutable and os.Args are go strings. We cannot zero them out or deallocate.
+		cmdArgs,err := tokenize(securemem.ToByteSlice([]byte(os.Args[2])))
 		if err != nil {
 			fmt.Println("Error while parsing arguments:", err)
 			os.Exit(1)
@@ -214,9 +215,10 @@ func main() {
 		printVaultInfo(&fileStruct, &header)
 
 	default:
-		var byteArgs = make([][]byte, 0, len(os.Args[1:]))
+		// go strings are immutable and os.Args are go strings. We cannot zero them out or deallocate.
+		var byteArgs = make([]securemem.ByteSlice, 0, len(os.Args[1:]))
 		for i:=1; i < len(os.Args); i++ {
-			byteArgs = append(byteArgs, []byte(os.Args[i]))
+			byteArgs = append(byteArgs, securemem.ToByteSlice([]byte(os.Args[i])))
 		}
 
 		err := processCommand(nil, bytes.NewReader(nil), os.Stdout, byteArgs)
@@ -251,14 +253,17 @@ func startShell(sess *core.Session) error {
 			return err
 		}
 
-		args, err := tokenize([]byte(input))
+		// readline returns immutable input strings we cannot zero or deallocate.
+		// TODO: Consider write your own minimal readline with autocompletions
+
+		args, err := tokenize(securemem.ToByteSlice([]byte(input)))
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
 
 		if len(args) > 0 {
-			switch string(string(args[0].Value)) {
+			switch string(string(args[0].Value.Bytes)) {
 			case "exit":
 				rl.Close()
 				return nil
@@ -280,8 +285,8 @@ func startShell(sess *core.Session) error {
 func processPipeline(
 	sess *core.Session, tokens []Token, stdin io.Reader, finalStdout io.Writer, toTerminal bool) (error) {
 	defer func(){
-		// explicit zeroing after usage
-		for _,token := range tokens { securemem.ZeroBytes(token.Value) }
+		// explicit deallocation after usage
+		for _,token := range tokens { token.Value.Dealloc() }
 	}()
 
 	// commants split using "|"
@@ -327,9 +332,12 @@ func processPipeline(
 		}
 
 		// Process the substitutions and return an array of []byte as args
-		args,deallocS,err := processAllSubstitutions(sess, commandArgs)
+		args,err := processAllSubstitutions(sess, commandArgs)
 		if err != nil {return err}
-		defer deallocS()
+		defer func(){
+			// deallocate args after usage
+			for _,arg := range args { arg.Dealloc() }
+		}()
 
 		err = processCommand(sess, currentStdin, currentStdout, args)
 		if err != nil { return err }
@@ -352,17 +360,16 @@ var placeholderRegex = regexp.MustCompile(`\{\d+\}`) // Used to replace the plac
 
 // Process command processes the given command and return the stdout
 // Outputs will contain an extra newline character at the end
-func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args [][]byte) (error) {
+func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args []securemem.ByteSlice) (error) {
 	isOneshot := false
 
 	// If no session exists, create one.
 	if sess == nil {
 		isOneshot = true
 
-		passwd,dealloc,err := getInput(sess, "password: ", true)
-		defer dealloc()
+		passwd,err := getInput(sess, "password: ", true)
+		defer passwd.Dealloc()
 		if err != nil {return err}
-		defer securemem.ZeroBytes(passwd)
 
 		vaultPath := getVaultPath()
 
@@ -377,83 +384,84 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 
 	if(isOneshot) { defer sess.Destroy() }
 
-	switch string(args[0]) {
+	// its safe to convert first argument to string as it's a non-secret
+	switch string(args[0].Bytes) {
 	case "put": // Add an entry with the value
 
-		putArgs,deallocArgs, err := getArgs(sess, 2, args[1:], stdin, true)
-		defer deallocArgs()
+		putArgs, err := getArgs(sess, 2, args[1:], stdin, true)
+		defer func(){ for _,arg := range putArgs { arg.Dealloc() } }()
 		if err != nil {
 			return errors.New("Usage: put <epath> <value>\n"+err.Error())
 		}
 
-		err = sess.Put(string(putArgs[0]), []byte{}, putArgs[1])
+		err = sess.Put(string(putArgs[0].Bytes), []byte{}, putArgs[1])
 		if err != nil { return err }
 		err = sess.Save()
 		if err != nil { return errors.New("Error while saving changes: "+err.Error()) }
 
-		stdout.Write([]byte("inserted: "+string(putArgs[0])))
+		stdout.Write([]byte("inserted: "+string(putArgs[0].Bytes)))
 		return nil
 	
 	case "mput":
 
-		mputArgs,deallocArgs, err := getArgs(sess, 3, args[1:], stdin, true)
-		defer deallocArgs()
+		mputArgs, err := getArgs(sess, 3, args[1:], stdin, true)
+		defer func(){ for _,arg := range mputArgs { arg.Dealloc() } }()
 		if err != nil {
 			return errors.New("Usage: put <epath> <mtime> <value>\n"+err.Error())
 		}
 
-		var epath = mputArgs[0]
+		var epath = string(mputArgs[0].Bytes)
 		var newMtime = mputArgs[1] // Unix epoch in milliseconds
 		var value = mputArgs[2]
 
-		newMtimeInt, err := strconv.ParseUint(string(newMtime), 10, 64)
+		newMtimeInt, err := strconv.ParseUint(string(newMtime.Bytes), 10, 64)
 		if err != nil { return errors.New("invalid mtime format") }
 
 		var newMtimeBytes = make([]byte, 8)
 		binary.LittleEndian.PutUint64(newMtimeBytes, newMtimeInt)
 
-		err = sess.Put(string(epath), newMtimeBytes, value)
+		err = sess.Put(epath, newMtimeBytes, value)
 		if err != nil { return err }
 		err = sess.Save()
 		if err != nil { return errors.New("Error while saving changes: "+err.Error()) }
 
-		stdout.Write([]byte("inserted: "+string(epath)))
+		stdout.Write([]byte("inserted: "+epath))
 		return nil
 
 	case "update":
-		updateArgs,deallocArgs, err := getArgs(sess, 2, args[1:], stdin, true)
-		defer deallocArgs()
+		updateArgs, err := getArgs(sess, 2, args[1:], stdin, true)
+		defer func(){ for _,arg := range updateArgs { arg.Dealloc() } }()
 		if err != nil {
 			return errors.New("Usage: update <epath> <value>\n"+err.Error())
 		}
 
-		var epath = updateArgs[0]
+		var epath = string(updateArgs[0].Bytes)
 		var value = updateArgs[1]
 
-		fmt.Println("confirm the update attempt:",string(epath))
-		input,dealloc,err := getInput(sess, "(y/n): ", false)
-		defer dealloc()
+		fmt.Println("confirm the update attempt:",epath)
+		input,err := getInput(sess, "(y/n): ", false)
+		defer input.Dealloc()
 
-		if string(input) == "y" {
-			err := sess.Update(string(epath), value)
+		if string(input.Bytes) == "y" {
+			err := sess.Update(epath, value)
 			if err != nil { return err }
 			err = sess.Save()
 			if err != nil { return errors.New("Error while saving changes: "+err.Error()) }
 
-			stdout.Write([]byte("updated: "+string(epath)))
+			stdout.Write([]byte("updated: "+epath))
 			return nil
 
 		} else { stdout.Write([]byte("update attempt cancelled\n")); return nil }
 	
 	case "mtime":
 
-		mtimeArgs,deallocArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer deallocArgs()
+		mtimeArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		defer func(){ for _,arg := range mtimeArgs { arg.Dealloc() } }()
 		if err != nil {
 			return errors.New("Usage: mtime <epath>\n"+err.Error())
 		}
 
-		var epath = string(mtimeArgs[0])
+		var epath = string(mtimeArgs[0].Bytes)
 
 		// epath must be a file path string.
 		if !core.PathRegexp.MatchString(epath) || strings.HasSuffix(epath, "/") {
@@ -471,30 +479,30 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 		
 	case "get": // Get an entry's value
-		getArgs,deallocArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer deallocArgs()
+		getArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		defer func(){ for _,arg := range getArgs { arg.Dealloc() } }()
 		if err != nil {
 			return errors.New("Usage: get <epath>\n"+err.Error())
 		}
 
 		var epath = getArgs[0]
-		val,deallocVal, err := sess.Get(string(epath))
+		val, err := sess.Get(string(epath.Bytes))
+		defer val.Dealloc()
 		if err != nil { return err }
 
-		stdout.Write(val)
-		deallocVal()
+		stdout.Write(val.Bytes)
 
 		return nil
 
 	case "mv":
-		mvArgs,deallocArgs, err := getArgs(sess, 2, args[1:], stdin, false)
-		defer deallocArgs()
+		mvArgs, err := getArgs(sess, 2, args[1:], stdin, false)
+		defer func(){ for _,arg := range mvArgs { arg.Dealloc() } }()
 		if err != nil {
 			return errors.New("Usage: mv <old> <new>\n"+err.Error())
 		}
 
-		var oldpath = string(mvArgs[0])
-		var newpath = string(mvArgs[1])
+		var oldpath = string(mvArgs[0].Bytes)
+		var newpath = string(mvArgs[1].Bytes)
 
 		err = sess.Mv(oldpath, newpath)
 		if err != nil { return err }
@@ -508,19 +516,19 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return  nil
 
 	case "rm": // Remove a single entry
-		rmArgs,deallocArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer deallocArgs()
+		rmArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		defer func(){ for _,arg := range rmArgs { arg.Dealloc() } }()
 		if err != nil {
 			return errors.New("Usage: rm <epath>\n"+err.Error())
 		}
 
-		var epath = string(rmArgs[0])
+		var epath = string(rmArgs[0].Bytes)
 
 		fmt.Println("confirm the deletion attempt:",epath)
-		input,dealloc,err := getInput(sess, "(y/n): ", false)
-		defer dealloc()
+		input,err := getInput(sess, "(y/n): ", false)
+		defer input.Dealloc()
 
-		if string(input) == "y" {
+		if string(input.Bytes) == "y" {
 			err := sess.Rm(string(epath))
 			if err != nil { return err }
 
@@ -536,17 +544,17 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 
 		
 	case "rmd": // Remove a directory
-		rmdArgs,deallocArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer deallocArgs()
+		rmdArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		defer func(){ for _,arg := range rmdArgs { arg.Dealloc() } }()
 		if err != nil { return errors.New("Usage: rmd <dpath>\n"+err.Error()) }
 
-		var dpath = string(rmdArgs[0])
+		var dpath = string(rmdArgs[0].Bytes)
 
 		fmt.Println("confirm the deletion attempt:",dpath)
-		input,dealloc,err := getInput(sess, "(y/n): ", false)
-		defer dealloc()
+		input,err := getInput(sess, "(y/n): ", false)
+		defer input.Dealloc()
 
-		if string(input) == "y" {
+		if string(input.Bytes) == "y" {
 			err := sess.Rmd(dpath)
 			if err != nil { return err }
 
@@ -571,7 +579,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			if err != nil { return err }
 
 		} else if len(args) == 2 {
-			dirs, entries, err = sess.Ls(string(args[1]))
+			dirs, entries, err = sess.Ls(string(args[1].Bytes))
 			if err != nil { return err }
 
 		} else { return errors.New("Usage: ls <dpath>") }
@@ -608,7 +616,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			if err != nil { return err }
 
 		} else if len(args) == 2 {
-			entries, err = sess.Lsall(string(args[1]))
+			entries, err = sess.Lsall(string(args[1].Bytes))
 			if err != nil { return err }
 
 		} else { return errors.New("Usage: lsall <dpath>") }
@@ -634,7 +642,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 			if err != nil { return err }
 
 		} else if len(args) == 2 {
-			err := sess.Cd(string(args[1]))
+			err := sess.Cd(string(args[1].Bytes)) // its okay to convert it to string as it's non-secret
 			if err != nil { return err }
 
 		} else { return errors.New("Usage: cd <dpath>") }
@@ -647,7 +655,7 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		// Create the command. This creates immutable strings from arguments. We must not pass secrets as arguments in here.
 		cmdArgs := make([]string, 0, len(args[1:]))
 		for i:=1; i < len(args); i++ {
-			cmdArgs = append(cmdArgs, string(args[i]))
+			cmdArgs = append(cmdArgs, string(args[i].Bytes))
 		}
 
 		shellCmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
@@ -664,8 +672,8 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 
 	case "eval":
-		evalArgs,deallocArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer deallocArgs()
+		evalArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		defer func(){ for _,arg := range evalArgs { arg.Dealloc() } }()
 		if err != nil { return errors.New("Usage: eval <pipeline>\n"+err.Error()) }
 
 		var cmd = evalArgs[0]
@@ -697,66 +705,64 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 	
 	case "senv":
-		senvArgs,deallocArgs, err := getArgs(sess, 2, args[1:], stdin, false)
-		defer deallocArgs()
+		senvArgs, err := getArgs(sess, 2, args[1:], stdin, false)
+		defer func(){ for _,arg := range senvArgs { arg.Dealloc() } }()
 		if err != nil {
 			return errors.New("Usage: senv <name> <value>\n"+err.Error())
 		}
 
-		err = sess.Senv(string(senvArgs[0]), senvArgs[1]) // Senv zeroes the value
+		err = sess.Senv(string(senvArgs[0].Bytes), senvArgs[1]) // Senv zeroes the value
 		if err != nil { return err }
 
 		return nil
 
 	case "genv":
-		genvArgs,deallocArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer deallocArgs()
+		genvArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		defer func(){ for _,arg := range genvArgs { arg.Dealloc() } }()
 		if err != nil { return errors.New("Usage: genv <name>\n"+err.Error()) }
 
-		val,dealloc,err := sess.Genv(string(genvArgs[0]))
+		val,err := sess.Genv(string(genvArgs[0].Bytes))
+		defer val.Dealloc()
 		if err!=nil{return err}
 
-		stdout.Write(val)
-		dealloc()
+		stdout.Write(val.Bytes)
 
 		return nil
 
 	case "renv":
-		renvArgs,deallocArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer deallocArgs()
+		renvArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		defer func(){ for _,arg := range renvArgs { arg.Dealloc() } }()
 		if err != nil { return errors.New("Usage: renv <name>\n"+err.Error()) }
 
-		sess.Renv(string(renvArgs[0]))
+		sess.Renv(string(renvArgs[0].Bytes))
 
 		return nil
 
 	default:
-		shortcutVal := shortcuts[string(args[0])]
+		shortcutVal := shortcuts[string(args[0].Bytes)] // we can convert it to string as it's a non-secret
 
-		expanded := string(shortcutVal)
+		expanded := bytes.Clone(shortcutVal) // we clone it to not modify the actual shortcutVal
 
 		// If the shortcut has a value
 		if len(shortcutVal) > 0 {
 			// Replace placeholders {1}, {2}, etc. with provided arguments.
 			for i := 1; i < len(args); i++ {
-				placeholder := fmt.Sprintf("{%d}", i)
-				expanded = strings.ReplaceAll(expanded, placeholder, string(args[i]))
+				placeholder := fmt.Appendf(nil, "{%d}", i)
+				expanded = bytes.ReplaceAll(expanded, placeholder, args[i].Bytes)
 			}
 
 			// Remove the remaining placeholders. This removes unused ones when no argument is passed etc.
-			expanded = placeholderRegex.ReplaceAllString(expanded, "")
+			expanded = placeholderRegex.ReplaceAll(expanded, []byte{})
 
 			// Parse the expanded shortcut string into arguments
-			expandedArgs, err := tokenize([]byte(expanded))
-			if err != nil {
-				return fmt.Errorf("shortcut expansion error: %w", err)
-			}
+			expandedArgs, err := tokenize(securemem.ToByteSlice(expanded)) // expanded may contain sensitive arguments here. We zero it out in ToByteSlice
+			if err != nil { return fmt.Errorf("shortcut expansion error: %w", err) }
 
 			return processPipeline(sess, expandedArgs, stdin, stdout, false)
 		}
 	}
 
-	return errors.New("unknown command: '"+string(args[0])+"'")
+	return errors.New("unknown command: '"+string(args[0].Bytes)+"'")
 }
 
 func getShortcuts(sess *core.Session) (map[string][]byte) {
@@ -767,9 +773,9 @@ func getShortcuts(sess *core.Session) (map[string][]byte) {
 		if strings.HasPrefix(epath, "/.shortcut/") {
 			shortcut,_ := strings.CutPrefix(epath, "/.shortcut/")
 			if !strings.Contains(shortcut, "/") {
-				shortcutVal,deallocVal, _ := sess.Get(epath) // they are non-secret info. We can clone them to go heap
-				shortcuts[shortcut] = bytes.Clone(shortcutVal)
-				deallocVal()
+				shortcutVal, _ := sess.Get(epath) // they are non-secret info. We can clone them to go heap
+				shortcuts[shortcut] = bytes.Clone(shortcutVal.Bytes)
+				shortcutVal.Dealloc()
 			}
 		}
 
@@ -792,14 +798,14 @@ func getVaultPath() string {
 }
 
 // getInput prompts user to give an input. The written text will not shown if hidden is true.
-func getInput(sess *core.Session, prompt string, hidden bool) ([]byte,func(), error) {
+func getInput(sess *core.Session, prompt string, hidden bool) (securemem.ByteSlice, error) {
 	fmt.Fprintf(os.Stderr, "%s", prompt)
 
 	fd := int(os.Stdin.Fd())
 
 	// Put the terminal into raw mode to catch key presses
 	oldState, err := term.MakeRaw(fd)
-	if err != nil { return nil, func(){}, err }
+	if err != nil { return securemem.ByteSlice{}, err }
 	defer term.Restore(fd, oldState)
 
 	// restore the state on SIGINT or SIGTERM
@@ -813,44 +819,41 @@ func getInput(sess *core.Session, prompt string, hidden bool) ([]byte,func(), er
 		os.Exit(1)
 	}()
 
-	// Allocate a 16 KB buffer for whole password input
-	// TODO: make this dynamically growing securemem.Buffer instead.
-	inputBuf,dealloc,err := securemem.Alloc(1024*16)
-	if err != nil {return nil, func(){},err}
+	inputBuf := &securemem.Buffer{}
 
 	pos := 0 // the position in the input buffer. The length of the byte array
 
 	// allocate a 1 byte buffer for per char input
-	charBuf, deallocCharBuf, err := securemem.Alloc(1)
-	if err != nil {return nil,dealloc,err}
-	defer deallocCharBuf()
+	charBuf, err := securemem.Alloc(1)
+	if err != nil {return securemem.ByteSlice{},err}
+	defer charBuf.Dealloc()
 
 	for {
-		_, err := os.Stdin.Read(charBuf)
-		if err != nil { return nil,dealloc,err }
+		_, err := os.Stdin.Read(charBuf.Bytes)
+		if err != nil { return inputBuf.Bytes(),err }
 
-		b := charBuf[0]
+		b := charBuf.Bytes[0]
 
 		// Handle ctrl+c (ascii 3)
         if b == 3 {
             term.Restore(fd, oldState)
             fmt.Fprintf(os.Stderr, "\r\n")
-            return nil, func(){}, errors.New("interrupted")
+            return inputBuf.Bytes(), errors.New("interrupted")
         }
 
 		// suppress ansi escape sequences (arrow keys, home, end, etc.)
 		if b == 27 { // 0x1B (esc)
 			// read the next character to check for '['
-			subCharBuf, deallocSubCharBuf, err := securemem.Alloc(2)
-			if err != nil { deallocSubCharBuf(); return nil,dealloc, err }
+			subCharBuf, err := securemem.Alloc(2)
+			if err != nil { subCharBuf.Dealloc(); return inputBuf.Bytes(), err }
 
-			n, _ := os.Stdin.Read(subCharBuf[:1])
+			n, _ := os.Stdin.Read(subCharBuf.Bytes[:1])
 			// If it's '[', read and consume one more byte too.
-			if n > 0 && subCharBuf[0] == '[' {
+			if n > 0 && subCharBuf.Bytes[0] == '[' {
 				// Read the final specifier byte (e.g., A, B, C, D)
-				os.Stdin.Read(subCharBuf[1:2])
+				os.Stdin.Read(subCharBuf.Bytes[1:2])
 			}
-			deallocSubCharBuf()
+			subCharBuf.Dealloc()
 			continue
 		}
 
@@ -872,11 +875,10 @@ func getInput(sess *core.Session, prompt string, hidden bool) ([]byte,func(), er
 		if b < 32 { continue }
 
 		// check the length limit
-		if pos+1 > 1024*16 { return nil,dealloc,errors.New("character limit exceeded (max 16kb)") }
+		if pos+1 > 1024*16 { return inputBuf.Bytes(),errors.New("character limit exceeded (max 16kb)") }
 
 		// store the key
-		inputBuf[pos] = b
-		pos++ // as we first add and increase later, post represents the length of the array. Aka: the next element's index
+		inputBuf.WriteByte(b)
 
 		// if it's hidden, show asterisk instead of raw chars
 		if hidden {
@@ -887,33 +889,26 @@ func getInput(sess *core.Session, prompt string, hidden bool) ([]byte,func(), er
 
 	// Move to a new line after raw mode finishes
 	fmt.Fprintf(os.Stderr, "\r\n")
-	return inputBuf[:pos], dealloc, nil
+	return inputBuf.Bytes(), nil
 }
 
 // get the arguments from passed positional arguments and stdin. Give error if it's not enough to create args in requiredCount.
 // Ask for user input if given arguments does not match the required count while ask is true
 func getArgs(
-	sess *core.Session, requiredCount int, givenargs [][]byte, stdin io.Reader, ask bool,
-) (totalargs [][]byte, dealloc func(), err error) {
-
-	var deallocChain []func()
-	dealloc = func(){
-		for _,d := range deallocChain { d() }
-	}
+	sess *core.Session, requiredCount int, givenargs []securemem.ByteSlice, stdin io.Reader, ask bool,
+) (totalargs []securemem.ByteSlice, err error) {
 
 	for _,arg := range givenargs {
 		totalargs = append(totalargs, arg)
-		// zero the given arguments
-		deallocChain = append(deallocChain, func() { securemem.ZeroBytes(arg) })
 	}
 
 	// If argument count exceeds the requiredCount, give error
 	if len(totalargs) > requiredCount {
-		return nil,dealloc, errors.New("passed argument count exceeds the required count")
+		return totalargs, errors.New("passed argument count exceeds the required count")
 	
 	// If it matches the count exactly, return it.
 	} else if len(totalargs) == requiredCount {
-		return totalargs,dealloc, nil
+		return totalargs, nil
 
 	// Else, split stdin by newlines and add them as args until requiredCount is satisfied. If there is still more '\n' separated arguments left in stdinArgs, combine them in the last totalargs argument.
 	} else {
@@ -921,31 +916,41 @@ func getArgs(
 		var stdinArgs [][]byte
 		// Only split stdinArgs if stdinBytes is not empty. If we don't do that, bytes.Split returns stdinArgs with one empty slice item.
 		stdinBytes,err := io.ReadAll(stdin) // zero the stdin bytes
-		if err != nil {return nil,dealloc, err}
-
-		deallocChain = append(deallocChain, func() { securemem.ZeroBytes(stdinBytes) })
+		defer securemem.ZeroBytes(stdinBytes)
+		if err != nil {return totalargs, err}
 
 		if len(stdinBytes) > 0 {
 			stdinArgs = bytes.Split(stdinBytes, []byte{'\n'}) // bytes.Split does not copy the bytes
 		}
 
 		// Give error if stdinArgs has not enough arguments to satisfy requiredArgsLeft
-		if !ask && len(stdinArgs) < requiredArgsLeft {return nil,dealloc, errors.New("not enough arguments provided")}
+		if !ask && len(stdinArgs) < requiredArgsLeft {return totalargs, errors.New("not enough arguments provided")}
 
 		// Take what's available from stdinArgs
 		argsToTake := requiredArgsLeft
 		if len(stdinArgs) < argsToTake { argsToTake = len(stdinArgs) }
 
 		// Append those arguments to the totalargs list
-		for i := range argsToTake { totalargs = append(totalargs, stdinArgs[i]) }
+		for i := range argsToTake { totalargs = append(totalargs, securemem.ToByteSlice(stdinArgs[i])) }
 
 		// Append the leftover stdinArgs to the last totalargs argument
 		if len(stdinArgs) > requiredArgsLeft {
-			totalargs[len(totalargs)-1] = append(
-				totalargs[len(totalargs)-1],
-				// combine the rest with the last argument using '\n'
-				append([]byte{'\n'}, bytes.Join(stdinArgs[requiredArgsLeft:], []byte{'\n'})...)...,
-			)
+			lastArg := totalargs[len(totalargs)-1]
+			lastArgBuf := &securemem.Buffer{} // Create a buffer
+			lastArgBuf.Write(lastArg.Bytes) // write the last arg to it
+			lastArg.Dealloc() // deallocate the last argument
+
+			for i,argLeft := range stdinArgs[requiredArgsLeft:] {
+				// append argLeft to lastArgBuf
+				lastArgBuf.Write(argLeft)
+				// if it's not the last argument in stdinArgs[requiredArgsLeft:], add a '\n'. Because we split by it above
+				if i < len(stdinArgs[requiredArgsLeft:])-1 {
+					lastArgBuf.WriteByte('\n')
+				}
+			}
+
+			// Replace the last argument with lastArgBuf
+			totalargs[len(totalargs)-1] = lastArgBuf.Bytes()
 		}
 	}
 
@@ -953,49 +958,44 @@ func getArgs(
 	if ask && requiredCount-len(totalargs) > 0 {
 		// Get argument until requiredCount gets equal to len(totalargs)
 		for requiredCount-len(totalargs) > 0 {
-			arg,deallocArg,err := getInput(sess, fmt.Sprintf("arg-%v: ", len(totalargs)+1), true)
-			deallocChain = append(deallocChain, deallocArg) // zero the inputs
-			if err != nil {return nil,dealloc,err}
+			arg,err := getInput(sess, fmt.Sprintf("arg-%v: ", len(totalargs)+1), true)
+			if err != nil {return totalargs,err}
 			totalargs = append(totalargs, arg)
 		}
 	}
 
-	return totalargs,dealloc, nil
+	return totalargs, nil
 }
 
 ////////////////////////////////////////////////////////
 
-func processAllSubstitutions(sess *core.Session, tokens []Token) ([][]byte,func(), error) {
-	var expanded [][]byte
-	var deallocChain []func()
-
-	deallocAll := func(){
-		for _,dealloc := range deallocChain { dealloc() }
-	}
+func processAllSubstitutions(sess *core.Session, tokens []Token) ([]securemem.ByteSlice, error) {
+	var expanded []securemem.ByteSlice
 
 	for _,token := range tokens {
-		exp,dealloc, err := processSubstitution(sess, token)
-		if err != nil { return nil,deallocAll, err }
-		deallocChain = append(deallocChain, dealloc)
+		exp, err := processSubstitution(sess, token)
+		if err != nil { return expanded, err }
 		expanded = append(expanded, exp)
 	}
-	return expanded,deallocAll, nil
+	return expanded, nil
 }
 
 // Get the substitution token, tokenize it's value, process the pipeline and return the value
-func processSubstitution(sess *core.Session, input Token) ([]byte,func(), error) {
+func processSubstitution(sess *core.Session, input Token) (securemem.ByteSlice, error) {
 	if input.Type == SUBSTITUTION {
 
 		cmdArgs,err := tokenize(input.Value)
-		if err != nil {return nil,func(){}, err}
+		// deallocate the tokens after usage
+		defer func(){ for _,arg := range cmdArgs { arg.Value.Dealloc() } }()
+		if err != nil {return securemem.ByteSlice{}, err}
 
 		var buf = &securemem.Buffer{}
 		err = processPipeline(sess, cmdArgs, bytes.NewReader(nil), buf, false)
-		if err != nil { return nil,func(){}, err }
+		if err != nil { return securemem.ByteSlice{}, err }
 
-		return buf.Bytes(),func(){buf.Dealloc()},nil
+		return buf.Bytes(),nil
 
-	} else { return input.Value,func(){securemem.ZeroBytes(input.Value)}, nil }
+	} else { return input.Value, nil }
 }
 
 ///////////////////////////////////////////////////////
