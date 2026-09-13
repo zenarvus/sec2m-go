@@ -821,8 +821,6 @@ func getInput(sess *core.Session, prompt string, hidden bool) (securemem.ByteSli
 
 	inputBuf := &securemem.Buffer{}
 
-	pos := 0 // the position in the input buffer. The length of the byte array
-
 	// allocate a 1 byte buffer for per char input
 	charBuf, err := securemem.Alloc(1)
 	if err != nil {return securemem.ByteSlice{},err}
@@ -862,9 +860,8 @@ func getInput(sess *core.Session, prompt string, hidden bool) (securemem.ByteSli
 
 		// Handle backspace (ascii 8) and del (ascii 127)
 		if b == 8 || b == 127 {
-			if pos > 0 {
-				pos-- // delete the char from input buf
-
+			if inputBuf.Len() > 0 {
+				inputBuf.Trim(1) // delete the last char from the input buffer
 				// erase the last asterisk: step back, overwrite with space, step back
 				fmt.Fprintf(os.Stderr, "\b \b")
 			}
@@ -873,9 +870,6 @@ func getInput(sess *core.Session, prompt string, hidden bool) (securemem.ByteSli
 
 		// Skip non-printable control characters
 		if b < 32 { continue }
-
-		// check the length limit
-		if pos+1 > 1024*16 { return inputBuf.Bytes(),errors.New("character limit exceeded (max 16kb)") }
 
 		// store the key
 		inputBuf.WriteByte(b)

@@ -97,6 +97,8 @@ func (buf *Buffer) Bytes() ByteSlice {
 	return ByteSlice{Bytes: buf.slice.Bytes[:buf.length], Dealloc: buf.slice.Dealloc}
 }
 func (buf *Buffer) Len() int { return buf.length }
+// trim the last n bytes from the buffer. Do not if it results in length being less than zero
+func (buf *Buffer) Trim(n int) { if buf.length-n > 0 { buf.length -= n } else { buf.length = 0 } }
 
 // Write appends b to the buffer by copying it. Grows if necessary. Implements io.Writer
 func (buf *Buffer) Write(b []byte) (n int, err error) {
