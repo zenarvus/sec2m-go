@@ -178,9 +178,9 @@ func (s *Session) Destroy() {
 	s.SessionKey.Dealloc() // Securely deallocate the session key
 
 	// Zero encrypted keys in memory
-	securemem.ZeroBytes(s.OutEncKey.EncryptedKey)
-	securemem.ZeroBytes(s.InnEncKey.EncryptedKey)
-	securemem.ZeroBytes(s.MacKey.EncryptedKey)
+	if s.OutEncKey != nil { securemem.ZeroBytes(s.OutEncKey.EncryptedKey) }
+	if s.InnEncKey != nil { securemem.ZeroBytes(s.InnEncKey.EncryptedKey) }
+	if s.MacKey != nil { securemem.ZeroBytes(s.MacKey.EncryptedKey) }
 
 	// Zero encrypted entry and environment values in memory
 	for _, v := range s.EntryMap { securemem.ZeroBytes(v.Value) }
@@ -351,7 +351,7 @@ func LoadSession(filepath string, password securemem.ByteSlice) (*Session, error
 	}
 
 	plaintextOutEncKey, err := outenckey.Get(sess.SessionKey, sess.Header.SEAlgo)
-	defer plaintextMacKey.Dealloc()
+	defer plaintextOutEncKey.Dealloc()
 	if err != nil { sess.Destroy(); return nil, err }
 
 	// Decrypt the body. Compack reuses bytes in here when parsing to structs. Deleting them will remove them from the struct fields too. So we need to clone it when using
