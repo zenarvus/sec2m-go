@@ -31,7 +31,9 @@ func UnlockMemory(b ByteSlice) error {
 // It applies madvise flags to prevent dumping/swapping behavior where possible.
 // Returns a deallocator function that should be used to free the allocated memory
 func Alloc(size int, opts ...Option) (ByteSlice, error) {
-	if size <= 0 { return ByteSlice{}, fmt.Errorf("invalid allocation size: %d", size) }
+	if size <= 0 { return ByteSlice{
+		Dealloc:func() error {return nil},
+	}, fmt.Errorf("invalid allocation size: %d", size) }
 
 	cfg := &config{lock: false}
 	// Apply the modifications provided as opts to the cfg
@@ -44,7 +46,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
 		unix.PROT_READ|unix.PROT_WRITE,
 		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
 	)
-	if err != nil { return ByteSlice{}, fmt.Errorf("mmap failed: %w", err) }
+	if err != nil { return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mmap failed: %w", err) }
 
 	// Advise kernel to exclude this memory region from coredumps
 	_ = unix.Madvise(b, unix.MADV_DONTDUMP)
@@ -56,7 +58,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
 		if err := unix.Mlock(b); err != nil {
 			// Unmap before returning to avoid leaking memory if locking fails
 			_ = unix.Munmap(b)
-			return ByteSlice{}, fmt.Errorf("mlock failed (check RLIMIT_MEMLOCK): %w", err)
+			return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mlock failed (check RLIMIT_MEMLOCK): %w", err)
 		}
 	}
 

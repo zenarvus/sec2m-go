@@ -24,7 +24,7 @@ func UnlockMemory(b ByteSlice) error {
 }
 
 func Alloc(size int, opts ...Option) (ByteSlice, error) {
-    if size <= 0 { return ByteSlice{}, fmt.Errorf("invalid allocation size: %d", size) }
+    if size <= 0 { return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("invalid allocation size: %d", size) }
 
     cfg := &config{lock: false}
     for _, opt := range opts { opt(cfg) }
@@ -35,7 +35,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
         windows.MEM_COMMIT|windows.MEM_RESERVE, 
         windows.PAGE_READWRITE,
     )
-    if err != nil { return ByteSlice{}, fmt.Errorf("VirtualAlloc failed: %w", err) }
+    if err != nil { return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("VirtualAlloc failed: %w", err) }
 
     // Convert raw pointer into a Go byte slice
     b := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)
@@ -43,7 +43,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
     if cfg.lock {
         if err := windows.VirtualLock(addr, uintptr(size)); err != nil {
             _ = windows.VirtualFree(addr, 0, windows.MEM_RELEASE)
-            return ByteSlice{}, fmt.Errorf("VirtualLock failed (requires SeLockMemoryPrivilege): %w", err)
+            return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("VirtualLock failed (requires SeLockMemoryPrivilege): %w", err)
         }
     }
 

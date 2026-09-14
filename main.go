@@ -26,19 +26,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
-	"github.com/chzyer/readline"
 	cmpck "github.com/zenarvus/compack/go"
 	"github.com/zenarvus/sec2m-go/core"
+	"github.com/zenarvus/sec2m-go/readline"
 	"github.com/zenarvus/sec2m-go/securemem"
-	"golang.org/x/term"
 )
 
 func main() {
@@ -74,13 +71,13 @@ func main() {
 
 		vaultPath := getVaultPath()
 
-		pw,err := getInput(nil, "set password: ", true)
+		pw,err := readline.NewReadline("set password: ", true, nil).Read()
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer pw.Dealloc()
-		if err!=nil{fmt.Println(err); os.Exit(1)}
 
-		pwAgain,err := getInput(nil, "repeat: ", true)
-		defer pwAgain.Dealloc()
+		pwAgain,err := readline.NewReadline("repeat: ", true, nil).Read()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
+		defer pwAgain.Dealloc()
 
 		if !bytes.Equal(pw.Bytes, pwAgain.Bytes) {
 			fmt.Println("Passwords do not match")
@@ -104,17 +101,17 @@ func main() {
 			os.Exit(1)
 		}
 
-		oldpw,err := getInput(nil, "old password: ", true)
+		oldpw,err := readline.NewReadline("old password: ", true, nil).Read()
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer oldpw.Dealloc()
-		if err!=nil{fmt.Println(err); os.Exit(1)}
 
-		newpw,err := getInput(nil, "new password: ", true)
+		newpw,err := readline.NewReadline("new password: ", true, nil).Read()
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer newpw.Dealloc()
-		if err!=nil{fmt.Println(err); os.Exit(1)}
 
-		newpwagain,err := getInput(nil, "repeat: ", true)
-		defer newpwagain.Dealloc()
+		newpwagain,err := readline.NewReadline("repeat: ", true, nil).Read()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
+		defer newpwagain.Dealloc()
 
 		if !bytes.Equal(newpw.Bytes, newpwagain.Bytes) {
 			fmt.Println("Passwords do not match")
@@ -141,32 +138,32 @@ func main() {
 	case "shell":
 		vaultPath := getVaultPath()
 
-		pw,err := getInput(nil, "password: ", true)
-		defer pw.Dealloc()
+		pw,err := readline.NewReadline("password: ", true, nil).Read()
 		if err!=nil{fmt.Println(err); os.Exit(1)}
+		defer pw.Dealloc()
 
 		sess, err := core.LoadSession(vaultPath, pw)
 		if err != nil {
-			fmt.Println("Error: "+err.Error())
+			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 		defer sess.Destroy()
 
 		err = startShell(sess)
 		if err != nil {
-			fmt.Println("Error: "+err.Error())
+			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 	case "shot":
 		vaultPath := getVaultPath()
 
-		pw,err := getInput(nil, "password: ", true)
+		pw,err := readline.NewReadline("password: ", true, nil).Read()
+		if err!=nil{fmt.Println(err); os.Exit(1)}
 		defer pw.Dealloc()
-		if err != nil{fmt.Println(err); os.Exit(1)}
 
 		sess, err := core.LoadSession(vaultPath, pw)
 		if err != nil {
-			fmt.Println("Error: "+err.Error())
+			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 		defer sess.Destroy()
@@ -194,21 +191,21 @@ func main() {
 
 		fileBytes, err := os.ReadFile(vaultPath)
 		if err!=nil {
-			fmt.Println("Error: "+err.Error())
+			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 
 		var fileStruct core.File
 		err = cmpck.Unmarshal(fileBytes, &fileStruct)
 		if err != nil {
-			fmt.Println("Error: "+err.Error())
+			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 
 		var header core.UnmarshaledHeader
 		err = cmpck.Unmarshal(fileStruct.Header, &header) // Copy the metadata of the file to the session.
 		if err != nil {
-			fmt.Println("Error: "+err.Error())
+			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 
@@ -223,7 +220,7 @@ func main() {
 
 		err := processCommand(nil, bytes.NewReader(nil), os.Stdout, byteArgs)
 		if err != nil {
-			fmt.Println("Error: "+err.Error())
+			fmt.Println(err.Error())
 			os.Exit(1)
 		}
 	}
@@ -232,40 +229,37 @@ func main() {
 func startShell(sess *core.Session) error {
 
 	// Initialize readline
-	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          sess.Pwd + ": ",
-		InterruptPrompt: "^C",
-		EOFPrompt:       "exit",
-		AutoComplete: &AutoCompleter{sess:sess},
-	})
-	if err != nil { return err }
-	defer rl.Close() // Exit from the readline when loop ends.
+	rl := readline.Readline{
+		Prompt:sess.Pwd+": ",
+		Completer: &Completer{sess:sess},
+	}
+	defer rl.Dealloc() // Deallocate the history and other stuff readline accumulated
 
 	for {
 		// Set the prompt
 		rl.SetPrompt(sess.Pwd+": ")
 
 		// If an error happens with the readline, destroy the session.
-		input, err := rl.Readline()
+		input, err := rl.Read()
 		if err != nil {
 			sess.Destroy()
-			rl.Close()
+			rl.Dealloc()
 			return err
 		}
 
-		// readline returns immutable input strings we cannot zero or deallocate.
-		// TODO: Consider write your own minimal readline with autocompletions
-
-		args, err := tokenize(securemem.ToByteSlice([]byte(input)))
+		args, err := tokenize(input)
 		if err != nil {
+			input.Dealloc()
 			fmt.Println(err)
 			continue
 		}
+		
+		input.Dealloc()
 
 		if len(args) > 0 {
 			switch string(string(args[0].Value.Bytes)) {
 			case "exit":
-				rl.Close()
+				rl.Dealloc()
 				return nil
 			case "help":
 				printShellHelp()
@@ -283,7 +277,11 @@ func startShell(sess *core.Session) error {
 }
 
 func processPipeline(
-	sess *core.Session, tokens []Token, stdin io.Reader, finalStdout io.Writer, toTerminal bool) (error) {
+	sess *core.Session, tokens []Token, stdin io.Reader, finalStdout io.Writer, toTerminal bool,
+) (error) {
+
+	if len(tokens) == 0 {return nil} // do nothing if no token is provided
+
 	defer func(){
 		// explicit deallocation after usage
 		for _,token := range tokens { token.Value.Dealloc() }
@@ -367,9 +365,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 	if sess == nil {
 		isOneshot = true
 
-		passwd,err := getInput(sess, "password: ", true)
-		defer passwd.Dealloc()
+		passwd,err := readline.NewReadline("password: ", true, nil).Read()
 		if err != nil {return err}
+		defer passwd.Dealloc()
 
 		vaultPath := getVaultPath()
 
@@ -388,11 +386,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 	switch string(args[0].Bytes) {
 	case "put": // Add an entry with the value
 
-		putArgs, err := getArgs(sess, 2, args[1:], stdin, true)
+		putArgs, err := getArgs(2, args[1:], stdin, true)
+		if err != nil {return errors.New("Usage: put <epath> <value>\n"+err.Error())}
 		defer func(){ for _,arg := range putArgs { arg.Dealloc() } }()
-		if err != nil {
-			return errors.New("Usage: put <epath> <value>\n"+err.Error())
-		}
 
 		err = sess.Put(string(putArgs[0].Bytes), []byte{}, putArgs[1])
 		if err != nil { return err }
@@ -404,11 +400,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 	
 	case "mput":
 
-		mputArgs, err := getArgs(sess, 3, args[1:], stdin, true)
+		mputArgs, err := getArgs(3, args[1:], stdin, true)
+		if err != nil { return errors.New("Usage: put <epath> <mtime> <value>\n"+err.Error()) }
 		defer func(){ for _,arg := range mputArgs { arg.Dealloc() } }()
-		if err != nil {
-			return errors.New("Usage: put <epath> <mtime> <value>\n"+err.Error())
-		}
 
 		var epath = string(mputArgs[0].Bytes)
 		var newMtime = mputArgs[1] // Unix epoch in milliseconds
@@ -429,17 +423,16 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 
 	case "update":
-		updateArgs, err := getArgs(sess, 2, args[1:], stdin, true)
+		updateArgs, err := getArgs(2, args[1:], stdin, true)
+		if err != nil { return errors.New("Usage: update <epath> <value>\n"+err.Error()) }
 		defer func(){ for _,arg := range updateArgs { arg.Dealloc() } }()
-		if err != nil {
-			return errors.New("Usage: update <epath> <value>\n"+err.Error())
-		}
 
 		var epath = string(updateArgs[0].Bytes)
 		var value = updateArgs[1]
 
 		fmt.Println("confirm the update attempt:",epath)
-		input,err := getInput(sess, "(y/n): ", false)
+		input,err := readline.NewReadline("(y/n): ", false, nil).Read()
+		if err != nil {return err}
 		defer input.Dealloc()
 
 		if string(input.Bytes) == "y" {
@@ -455,11 +448,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 	
 	case "mtime":
 
-		mtimeArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		mtimeArgs, err := getArgs(1, args[1:], stdin, false)
+		if err != nil { return errors.New("Usage: mtime <epath>\n"+err.Error()) }
 		defer func(){ for _,arg := range mtimeArgs { arg.Dealloc() } }()
-		if err != nil {
-			return errors.New("Usage: mtime <epath>\n"+err.Error())
-		}
 
 		var epath = string(mtimeArgs[0].Bytes)
 
@@ -479,11 +470,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 		
 	case "get": // Get an entry's value
-		getArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		getArgs, err := getArgs(1, args[1:], stdin, false)
+		if err != nil { return errors.New("Usage: get <epath>\n"+err.Error()) }
 		defer func(){ for _,arg := range getArgs { arg.Dealloc() } }()
-		if err != nil {
-			return errors.New("Usage: get <epath>\n"+err.Error())
-		}
 
 		var epath = getArgs[0]
 		val, err := sess.Get(string(epath.Bytes))
@@ -495,11 +484,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 
 	case "mv":
-		mvArgs, err := getArgs(sess, 2, args[1:], stdin, false)
+		mvArgs, err := getArgs(2, args[1:], stdin, false)
+		if err != nil { return errors.New("Usage: mv <old> <new>\n"+err.Error()) }
 		defer func(){ for _,arg := range mvArgs { arg.Dealloc() } }()
-		if err != nil {
-			return errors.New("Usage: mv <old> <new>\n"+err.Error())
-		}
 
 		var oldpath = string(mvArgs[0].Bytes)
 		var newpath = string(mvArgs[1].Bytes)
@@ -516,16 +503,15 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return  nil
 
 	case "rm": // Remove a single entry
-		rmArgs, err := getArgs(sess, 1, args[1:], stdin, false)
+		rmArgs, err := getArgs(1, args[1:], stdin, false)
+		if err != nil { return errors.New("Usage: rm <epath>\n"+err.Error()) }
 		defer func(){ for _,arg := range rmArgs { arg.Dealloc() } }()
-		if err != nil {
-			return errors.New("Usage: rm <epath>\n"+err.Error())
-		}
 
 		var epath = string(rmArgs[0].Bytes)
 
 		fmt.Println("confirm the deletion attempt:",epath)
-		input,err := getInput(sess, "(y/n): ", false)
+		input,err := readline.NewReadline("(y/n): ", false, nil).Read()
+		if err != nil {return err}
 		defer input.Dealloc()
 
 		if string(input.Bytes) == "y" {
@@ -544,14 +530,15 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 
 		
 	case "rmd": // Remove a directory
-		rmdArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer func(){ for _,arg := range rmdArgs { arg.Dealloc() } }()
+		rmdArgs, err := getArgs(1, args[1:], stdin, false)
 		if err != nil { return errors.New("Usage: rmd <dpath>\n"+err.Error()) }
+		defer func(){ for _,arg := range rmdArgs { arg.Dealloc() } }()
 
 		var dpath = string(rmdArgs[0].Bytes)
 
 		fmt.Println("confirm the deletion attempt:",dpath)
-		input,err := getInput(sess, "(y/n): ", false)
+		input,err := readline.NewReadline("(y/n): ", false, nil).Read()
+		if err != nil {return err}
 		defer input.Dealloc()
 
 		if string(input.Bytes) == "y" {
@@ -672,9 +659,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 
 	case "eval":
-		evalArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer func(){ for _,arg := range evalArgs { arg.Dealloc() } }()
+		evalArgs, err := getArgs(1, args[1:], stdin, false)
 		if err != nil { return errors.New("Usage: eval <pipeline>\n"+err.Error()) }
+		defer func(){ for _,arg := range evalArgs { arg.Dealloc() } }()
 
 		var cmd = evalArgs[0]
 		cmdArgs, err := tokenize(cmd)
@@ -705,11 +692,11 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 	
 	case "senv":
-		senvArgs, err := getArgs(sess, 2, args[1:], stdin, false)
-		defer func(){ for _,arg := range senvArgs { arg.Dealloc() } }()
+		senvArgs, err := getArgs(2, args[1:], stdin, false)
 		if err != nil {
 			return errors.New("Usage: senv <name> <value>\n"+err.Error())
 		}
+		defer func(){ for _,arg := range senvArgs { arg.Dealloc() } }()
 
 		err = sess.Senv(string(senvArgs[0].Bytes), senvArgs[1]) // Senv zeroes the value
 		if err != nil { return err }
@@ -717,9 +704,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 
 	case "genv":
-		genvArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer func(){ for _,arg := range genvArgs { arg.Dealloc() } }()
+		genvArgs, err := getArgs(1, args[1:], stdin, false)
 		if err != nil { return errors.New("Usage: genv <name>\n"+err.Error()) }
+		defer func(){ for _,arg := range genvArgs { arg.Dealloc() } }()
 
 		val,err := sess.Genv(string(genvArgs[0].Bytes))
 		defer val.Dealloc()
@@ -730,9 +717,9 @@ func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args 
 		return nil
 
 	case "renv":
-		renvArgs, err := getArgs(sess, 1, args[1:], stdin, false)
-		defer func(){ for _,arg := range renvArgs { arg.Dealloc() } }()
+		renvArgs, err := getArgs(1, args[1:], stdin, false)
 		if err != nil { return errors.New("Usage: renv <name>\n"+err.Error()) }
+		defer func(){ for _,arg := range renvArgs { arg.Dealloc() } }()
 
 		sess.Renv(string(renvArgs[0].Bytes))
 
@@ -797,99 +784,9 @@ func getVaultPath() string {
 	return vaultPath
 }
 
-// getInput prompts user to give an input. The written text will not shown if hidden is true.
-func getInput(sess *core.Session, prompt string, hidden bool) (securemem.ByteSlice, error) {
-	fmt.Fprintf(os.Stderr, "%s", prompt)
-
-	fd := int(os.Stdin.Fd())
-
-	// Put the terminal into raw mode to catch key presses
-	oldState, err := term.MakeRaw(fd)
-	if err != nil { return securemem.ByteSlice{}, err }
-	defer term.Restore(fd, oldState)
-
-	// restore the state on SIGINT or SIGTERM
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
-	go func() {
-		<-sigChan
-		term.Restore(fd, oldState)
-		if sess != nil { sess.Destroy() }
-		os.Exit(1)
-	}()
-
-	inputBuf := &securemem.Buffer{}
-
-	// allocate a 1 byte buffer for per char input
-	charBuf, err := securemem.Alloc(1)
-	if err != nil {return securemem.ByteSlice{},err}
-	defer charBuf.Dealloc()
-
-	for {
-		_, err := os.Stdin.Read(charBuf.Bytes)
-		if err != nil { return inputBuf.Bytes(),err }
-
-		b := charBuf.Bytes[0]
-
-		// Handle ctrl+c (ascii 3)
-        if b == 3 {
-            term.Restore(fd, oldState)
-            fmt.Fprintf(os.Stderr, "\r\n")
-            return inputBuf.Bytes(), errors.New("interrupted")
-        }
-
-		// suppress ansi escape sequences (arrow keys, home, end, etc.)
-		if b == 27 { // 0x1B (esc)
-			// read the next character to check for '['
-			subCharBuf, err := securemem.Alloc(2)
-			if err != nil { subCharBuf.Dealloc(); return inputBuf.Bytes(), err }
-
-			n, _ := os.Stdin.Read(subCharBuf.Bytes[:1])
-			// If it's '[', read and consume one more byte too.
-			if n > 0 && subCharBuf.Bytes[0] == '[' {
-				// Read the final specifier byte (e.g., A, B, C, D)
-				os.Stdin.Read(subCharBuf.Bytes[1:2])
-			}
-			subCharBuf.Dealloc()
-			continue
-		}
-
-		// Handle enter (\r or \n)
-		if b == '\r' || b == '\n' { break }
-
-		// Handle backspace (ascii 8) and del (ascii 127)
-		if b == 8 || b == 127 {
-			if inputBuf.Len() > 0 {
-				inputBuf.Trim(1) // delete the last char from the input buffer
-				// erase the last asterisk: step back, overwrite with space, step back
-				fmt.Fprintf(os.Stderr, "\b \b")
-			}
-			continue
-		}
-
-		// Skip non-printable control characters
-		if b < 32 { continue }
-
-		// store the key
-		inputBuf.WriteByte(b)
-
-		// if it's hidden, show asterisk instead of raw chars
-		if hidden {
-			fmt.Fprintf(os.Stderr, "*")
-
-		} else { fmt.Fprintf(os.Stderr, "%s", string(b)) }
-	}
-
-	// Move to a new line after raw mode finishes
-	fmt.Fprintf(os.Stderr, "\r\n")
-	return inputBuf.Bytes(), nil
-}
-
 // get the arguments from passed positional arguments and stdin. Give error if it's not enough to create args in requiredCount.
 // Ask for user input if given arguments does not match the required count while ask is true
-func getArgs(
-	sess *core.Session, requiredCount int, givenargs []securemem.ByteSlice, stdin io.Reader, ask bool,
+func getArgs(requiredCount int, givenargs []securemem.ByteSlice, stdin io.Reader, ask bool,
 ) (totalargs []securemem.ByteSlice, err error) {
 
 	for _,arg := range givenargs {
@@ -952,8 +849,10 @@ func getArgs(
 	if ask && requiredCount-len(totalargs) > 0 {
 		// Get argument until requiredCount gets equal to len(totalargs)
 		for requiredCount-len(totalargs) > 0 {
-			arg,err := getInput(sess, fmt.Sprintf("arg-%v: ", len(totalargs)+1), true)
-			if err != nil {return totalargs,err}
+
+			arg,err := readline.NewReadline(fmt.Sprintf("arg-%v: ",len(totalargs)+1), true, nil).Read()
+			if err!=nil{return totalargs, err}
+
 			totalargs = append(totalargs, arg)
 		}
 	}
@@ -994,14 +893,14 @@ func processSubstitution(sess *core.Session, input Token) (securemem.ByteSlice, 
 
 ///////////////////////////////////////////////////////
 
-type AutoCompleter struct { sess *core.Session }
+type Completer struct { sess *core.Session }
 
 // Do implements the readline.AutoCompleter interface
-func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, length int) {
-	lineStr := string(line[:pos]) // Get the everything until the cursor
+func (v *Completer) Get(line securemem.ByteSlice, pos int) (completionOpts [][]byte) {
+	lineStr := string(line.Bytes[:pos]) // Get the everything until the cursor
 	
 	// Handle empty or whitespace-only input
-	if strings.TrimSpace(lineStr) == "" { return nil, 0 }
+	if strings.TrimSpace(lineStr) == "" { return nil }
 
 	// Split by space to figure out if we are completing a command or a path
 	args := strings.Split(lineStr, " ")
@@ -1017,11 +916,11 @@ func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, lengt
 		for _, cmd := range cmds {
 			if strings.HasPrefix(cmd, lineStr) {
 				// Append the remaining string for completion of the current types string
-				completionOpts = append(completionOpts, []rune(strings.TrimPrefix(cmd, lineStr)))
+				completionOpts = append(completionOpts, []byte(strings.TrimPrefix(cmd, lineStr)))
 			}
 		}
 		// Return the completion options
-		return completionOpts, 0
+		return completionOpts
 	}
 
 	// If there are more than one argument, we are typing arguments of the command (file/folder paths)
@@ -1045,15 +944,15 @@ func (v *AutoCompleter) Do(line []rune, pos int) (completionOpts [][]rune, lengt
 	// Filter results to only those that match what we typed and return the remaining possibilities
 	for _, res := range results {
 		if strings.HasPrefix(res, lastArg) {
-			completionOpts = append(completionOpts, []rune(strings.TrimPrefix(res, lastArg)))
+			completionOpts = append(completionOpts, []byte(strings.TrimPrefix(res, lastArg)))
 		}
 	}
 
 	// Return the completion possibilities
-	return completionOpts, 0
+	return completionOpts
 }
 
-func (v *AutoCompleter) getCompletions(line string, dirsOnly bool) []string {
+func (v *Completer) getCompletions(line string, dirsOnly bool) []string {
 	dirPath := ""
 	
 	// Extract the directory portion of the string

@@ -43,9 +43,6 @@ git clone https://github.com/zenarvus/sec2m-go && cd sec2m-go && go build .
 
 Now you are ready to go!
 
-## Roadmap
-Consider migrating to <https://github.com/reeflective/readline>
-
 ## Help
 ```
 Usage: VAULT=/path/to/file.sdb sec2m <command> [args]

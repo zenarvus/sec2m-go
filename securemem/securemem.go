@@ -52,7 +52,8 @@ type ByteSlice struct {
 
 // Convert a regular go heap []byte to ByteSlice and zero it
 func ToByteSlice(b []byte) ByteSlice {
-	bSlice, _ := Alloc(len(b))
+	bSlice, err := Alloc(len(b))
+	if err != nil {return bSlice}
 	copy(bSlice.Bytes, b)
 	ZeroBytes(b)
 	return bSlice
@@ -92,7 +93,9 @@ func (buf *Buffer) grow(mincap int) error {
 }
 // return all the bytes written to the buffer
 func (buf *Buffer) Bytes() ByteSlice {
-	if buf.slice == nil {return ByteSlice{}}
+	if buf.slice == nil {return ByteSlice{ Dealloc:func()error{return nil} } }
+
+	if buf.slice.Dealloc == nil { buf.slice.Dealloc = func()error{return nil} }
 
 	return ByteSlice{Bytes: buf.slice.Bytes[:buf.length], Dealloc: buf.slice.Dealloc}
 }
