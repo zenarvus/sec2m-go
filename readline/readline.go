@@ -11,8 +11,6 @@ import (
 	"golang.org/x/term"
 )
 
-// TODO: implement proper wrapping for completion  suggestions!
-
 type Completer interface {
 	Get(line securemem.ByteSlice, cursorPos int) (opts [][]byte)
 }

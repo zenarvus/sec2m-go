@@ -291,16 +291,18 @@ Signature = HMAC(MessageAuthenticationCodeKey, Version, Header, EncryptedBody) #
 ```
 
 ## Codebase
+2,587 LoC excluding helper scripts
+
 ```
 ├── LICENSE
 ├── README.md
-├── core # core vault logic
+├── core
 │   ├── core.go
 │   └── core_test.go
 ├── go.mod
 ├── go.sum
-├── help.go # just printing text
-├── helpers.sh # every-day helpers
+├── help.go
+├── helpers.sh
 │   ├── clipboard.sh
 │   ├── clipman.sh
 │   ├── git-signer.sh
@@ -308,15 +310,17 @@ Signature = HMAC(MessageAuthenticationCodeKey, Version, Header, EncryptedBody) #
 │   ├── spitter.sh
 │   └── totp.sh
 ├── logo.png
-├── main.go # main cli logic that utilizes core
+├── main.go
 ├── main_test.go
-├── migration.sh # migration helpers
+├── migration.sh
 │   ├── exporter.sh
 │   ├── flatten-kdbx.sh
 │   └── importer.sh
-├── parser.go # converting commands to tokens
+├── parser.go
 ├── parser_test.go
-└── securemem # manual memory alloc/dealloc, buffer and zeroing
+├── readline
+│   └── readline.go
+└── securemem
     ├── darwin.go
     ├── linux.go
     ├── other.go
