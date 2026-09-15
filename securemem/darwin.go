@@ -9,18 +9,18 @@ import (
 
 func Setup() error { return nil }
 
-func LockMemory(b ByteSlice) error {
+func LockMemory(b *ByteSlice) error {
     if len(b.Bytes) == 0 { return nil }
     return unix.Mlock(b.Bytes)
 }
 
-func UnlockMemory(b ByteSlice) error {
+func UnlockMemory(b *ByteSlice) error {
     if len(b.Bytes) == 0 { return nil }
     return unix.Munlock(b.Bytes)
 }
 
-func Alloc(size int, opts ...Option) (ByteSlice, error) {
-    if size <= 0 { return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("invalid allocation size: %d", size) }
+func Alloc(size int, opts ...Option) (*ByteSlice, error) {
+    if size <= 0 { return &ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("invalid allocation size: %d", size) }
 
     cfg := &config{lock: false}
     for _, opt := range opts { opt(cfg) }
@@ -32,12 +32,12 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
         unix.PROT_READ|unix.PROT_WRITE,
         unix.MAP_PRIVATE|unix.MAP_ANON,
     )
-    if err != nil { return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mmap failed: %w", err) }
+    if err != nil { return &ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mmap failed: %w", err) }
 
     if cfg.lock {
         if err := unix.Mlock(b); err != nil {
             _ = unix.Munmap(b)
-            return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mlock failed: %w", err)
+            return &ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mlock failed: %w", err)
         }
     }
 
@@ -47,7 +47,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
 	}
 	slice.Dealloc = func()error{ return dealloc(slice) }
 
-	return *slice, nil
+	return slice, nil
 }
 
 func dealloc(b *ByteSlice) error {

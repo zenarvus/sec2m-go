@@ -16,13 +16,13 @@ func Setup() error {
 }
 
 // LockMemory manually locks an existing slice in physical RAM.
-func LockMemory(b ByteSlice) error {
+func LockMemory(b *ByteSlice) error {
 	if len(b.Bytes) == 0 { return nil }
 	return unix.Mlock(b.Bytes)
 }
 
 // UnlockMemory unlocks a previously locked slice.
-func UnlockMemory(b ByteSlice) error {
+func UnlockMemory(b *ByteSlice) error {
 	if len(b.Bytes) == 0 { return nil }
 	return unix.Munlock(b.Bytes)
 }
@@ -30,8 +30,8 @@ func UnlockMemory(b ByteSlice) error {
 // Alloc requests raw memory pages from the OS using mmap.
 // It applies madvise flags to prevent dumping/swapping behavior where possible.
 // Returns a deallocator function that should be used to free the allocated memory
-func Alloc(size int, opts ...Option) (ByteSlice, error) {
-	if size <= 0 { return ByteSlice{
+func Alloc(size int, opts ...Option) (*ByteSlice, error) {
+	if size <= 0 { return &ByteSlice{
 		Dealloc:func() error {return nil},
 	}, fmt.Errorf("invalid allocation size: %d", size) }
 
@@ -46,7 +46,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
 		unix.PROT_READ|unix.PROT_WRITE,
 		unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
 	)
-	if err != nil { return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mmap failed: %w", err) }
+	if err != nil { return &ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mmap failed: %w", err) }
 
 	// Advise kernel to exclude this memory region from coredumps
 	_ = unix.Madvise(b, unix.MADV_DONTDUMP)
@@ -58,7 +58,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
 		if err := unix.Mlock(b); err != nil {
 			// Unmap before returning to avoid leaking memory if locking fails
 			_ = unix.Munmap(b)
-			return ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mlock failed (check RLIMIT_MEMLOCK): %w", err)
+			return &ByteSlice{Dealloc:func()error{return nil}}, fmt.Errorf("mlock failed (check RLIMIT_MEMLOCK): %w", err)
 		}
 	}
 
@@ -68,7 +68,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
 	}
 	slice.Dealloc = func()error{ return dealloc(slice) }
 
-	return *slice, nil
+	return slice, nil
 }
 
 // dealloc zeros out the sensitive contents, unlocks, and unmaps the buffer.

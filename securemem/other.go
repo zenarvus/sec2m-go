@@ -10,17 +10,17 @@ import (
 func Setup() error { return nil }
 
 // LockMemory is a no-op on generic platforms.
-func LockMemory(b ByteSlice) error {
+func LockMemory(b *ByteSlice) error {
 	return nil
 }
 
 // UnlockMemory is a no-op on generic platforms.
-func UnlockMemory(b ByteSlice) error { return nil }
+func UnlockMemory(b *ByteSlice) error { return nil }
 
 // Alloc requests standard heap memory from the Go runtime.
 // On unsupported platforms, this memory cannot be locked to RAM and may be written to swap files by the operating system.
-func Alloc(size int, opts ...Option) (ByteSlice, error) {
-	if size <= 0 { return ByteSlice{}, fmt.Errorf("invalid allocation size: %d", size) }
+func Alloc(size int, opts ...Option) (*ByteSlice, error) {
+	if size <= 0 { return &ByteSlice{}, fmt.Errorf("invalid allocation size: %d", size) }
 
 	// We still parse options so they don't cause unused variable errors, 
 	cfg := &config{lock: false}
@@ -35,7 +35,7 @@ func Alloc(size int, opts ...Option) (ByteSlice, error) {
 	}
 	slice.Dealloc = func()error{ return dealloc(slice) }
 
-	return *slice, nil
+	return slice, nil
 }
 
 // dealloc zeros out the contents before letting the Go garbage collector reclaim it.

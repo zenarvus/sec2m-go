@@ -1,5 +1,7 @@
 package readline
 
+// TODO: add colors
+
 import (
 	"bytes"
 	"fmt"
@@ -12,7 +14,8 @@ import (
 )
 
 type Completer interface {
-	Get(line securemem.ByteSlice, cursorPos int) (opts [][]byte)
+	// opts is the available options to be listed and delChars is the bytes to be deleted from cursor's left
+	Get(line *securemem.ByteSlice, cursorPos int) (opts [][]byte, delChars int)
 }
 
 // Readline provides a minimal raw-mode terminal prompt interface.
@@ -21,7 +24,7 @@ type Readline struct {
 	Completer Completer
 	Hidden bool // disables history and shows asterisk instead of actual chars
 	
-	history   []securemem.ByteSlice
+	history   []*securemem.ByteSlice
 }
 func NewReadline(prompt string, hidden bool, completer Completer) *Readline {
 	return &Readline{Prompt: prompt, Hidden: hidden, Completer: completer}
@@ -35,15 +38,15 @@ func (rl *Readline) Dealloc() {
 func (rl *Readline) SetPrompt(p string) { rl.Prompt = p }
 
 // Read blocks until the user presses Enter, handling line editing and history.
-func (rl *Readline) Read() (securemem.ByteSlice, error) {
+func (rl *Readline) Read() (*securemem.ByteSlice, error) {
 	// Make the terminal raw and get the old state
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil { return securemem.ByteSlice{}, err }
+	if err != nil { return &securemem.ByteSlice{}, err }
 	// Restore to the old terminal stte after return
 	defer term.Restore(int(os.Stdin.Fd()), oldState)
 
 	// we need to set Dealloc otherwise it will be nil and callers will panic
-	var input = securemem.ByteSlice{Dealloc:func()error{return nil}}
+	var input = &securemem.ByteSlice{Dealloc:func()error{return nil}}
 
 	cursorPos := 0 // byte based cursor position (not rune)
 
@@ -101,14 +104,14 @@ func (rl *Readline) Read() (securemem.ByteSlice, error) {
 	}
 
 	char,err := securemem.Alloc(1)
-	if err != nil {return securemem.ByteSlice{}, err}
+	if err != nil {return &securemem.ByteSlice{}, err}
 	defer char.Dealloc()
 
 	for {
 		render()
 
 		_, err := os.Stdin.Read(char.Bytes)
-		if err != nil { return securemem.ByteSlice{}, err }
+		if err != nil { return &securemem.ByteSlice{}, err }
 
 		switch char.Bytes[0] {
 		// Return when pressed to enter
@@ -144,10 +147,10 @@ func (rl *Readline) Read() (securemem.ByteSlice, error) {
 			return input, nil
 
 		case 3: // Ctrl+C
-			return securemem.ByteSlice{}, fmt.Errorf("interrupted")
+			return &securemem.ByteSlice{}, fmt.Errorf("interrupted")
 		case 4: // Ctrl+D
 			if len(input.Bytes) == 0 {
-				return securemem.ByteSlice{}, fmt.Errorf("EOF")
+				return &securemem.ByteSlice{}, fmt.Errorf("EOF")
 			}
 		case 127, 8: // Backspace
 			if cursorPos > 0 {
@@ -164,7 +167,7 @@ func (rl *Readline) Read() (securemem.ByteSlice, error) {
 			}
 		case '\t': // tab completion (only if a completer is set)
 			if rl.Completer != nil {
-				opts := rl.Completer.Get(input, cursorPos)
+				opts, delChars := rl.Completer.Get(input, cursorPos)
 				if len(opts) > 0 { // if there are options returned
 					prefix := commonPrefix(opts) // find the common longest prefix between completion options
 					defer prefix.Dealloc()
@@ -198,10 +201,10 @@ func (rl *Readline) Read() (securemem.ByteSlice, error) {
 
 					// place returned prefix to the cursor position
 					newBuf := &securemem.Buffer{}
-					newBuf.Write(input.Bytes[:cursorPos])
+					newBuf.Write(input.Bytes[:cursorPos-delChars]) // write the bytes of the cursor's left and delete some
 					newBuf.Write(prefix.Bytes)
 					newBuf.Write(input.Bytes[cursorPos:])
-					cursorPos = len(input.Bytes[:cursorPos])+len(prefix.Bytes) // move the cursor to it's new position
+					cursorPos = len(input.Bytes[:cursorPos-delChars])+len(prefix.Bytes) // move the cursor to it's new position
 					input.Dealloc()
 					input = newBuf.Bytes() // make the input the new buf
 				}
@@ -226,7 +229,7 @@ func (rl *Readline) Read() (securemem.ByteSlice, error) {
 					} else if histIdx == len(rl.history)-1 {
 						histIdx++
 						input.Dealloc()
-						input = securemem.ByteSlice{ Dealloc:func()error{return nil} }
+						input = &securemem.ByteSlice{ Dealloc:func()error{return nil} }
 						cursorPos = 0
 					}
 				case 'C': // Right
@@ -251,10 +254,10 @@ func (rl *Readline) Read() (securemem.ByteSlice, error) {
 }
 
 // commonPrefix finds the longest common starting string among completion options
-func commonPrefix(opts [][]byte) securemem.ByteSlice {
-	if len(opts) == 0 { return securemem.ByteSlice{Dealloc:func()error{return nil}} }
+func commonPrefix(opts [][]byte) *securemem.ByteSlice {
+	if len(opts) == 0 { return &securemem.ByteSlice{Dealloc:func()error{return nil}} }
 
-	prefix := opts[0]
+	prefix := bytes.Clone(opts[0]) // create a clone so we dont actually modify the original opts list
 	for _, opt := range opts[1:] {
 		for !bytes.HasPrefix(opt, prefix) {
 			prefix = prefix[:len(prefix)-1]
@@ -269,7 +272,7 @@ func prevRuneStart(b []byte, pos int) int {
 	if pos <= 0 { return 0 }
 	pos--
 	// Move backwards over utf8 continuation bytes.
-	for pos > 0 && !utf8.RuneStart(b[pos]) { pos-- }
+	for pos > 0 && pos < len(b) && !utf8.RuneStart(b[pos]) { pos-- }
 
 	return pos
 }

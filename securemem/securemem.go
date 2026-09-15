@@ -51,7 +51,7 @@ type ByteSlice struct {
 }
 
 // Convert a regular go heap []byte to ByteSlice and zero it
-func ToByteSlice(b []byte) ByteSlice {
+func ToByteSlice(b []byte) *ByteSlice {
 	bSlice, err := Alloc(len(b))
 	if err != nil {return bSlice}
 	copy(bSlice.Bytes, b)
@@ -60,7 +60,7 @@ func ToByteSlice(b []byte) ByteSlice {
 }
 
 // Generate a clone of ByteSlice
-func Clone(b ByteSlice) ByteSlice {
+func Clone(b *ByteSlice) *ByteSlice {
 	clone,err := Alloc(len(b.Bytes))
 	if err != nil {panic(err)}
 	copy(clone.Bytes, b.Bytes)
@@ -88,16 +88,16 @@ func (buf *Buffer) grow(mincap int) error {
 	if err != nil {return err}
 	copy(newBuf.Bytes,buf.slice.Bytes)
 	if buf.slice.Dealloc != nil {buf.slice.Dealloc()} // deallocate the old slice
-	buf.slice = &newBuf
+	buf.slice = newBuf
 	return nil
 }
 // return all the bytes written to the buffer
-func (buf *Buffer) Bytes() ByteSlice {
-	if buf.slice == nil {return ByteSlice{ Dealloc:func()error{return nil} } }
+func (buf *Buffer) Bytes() *ByteSlice {
+	if buf.slice == nil {return &ByteSlice{ Dealloc:func()error{return nil} } }
 
 	if buf.slice.Dealloc == nil { buf.slice.Dealloc = func()error{return nil} }
 
-	return ByteSlice{Bytes: buf.slice.Bytes[:buf.length], Dealloc: buf.slice.Dealloc}
+	return &ByteSlice{Bytes: buf.slice.Bytes[:buf.length], Dealloc: buf.slice.Dealloc}
 }
 func (buf *Buffer) Len() int { return buf.length }
 // trim the last n bytes from the buffer. Do not if it results in length being less than zero

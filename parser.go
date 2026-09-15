@@ -37,11 +37,11 @@ const(
 
 type Token struct {
 	Type TokenType
-	Value securemem.ByteSlice
+	Value *securemem.ByteSlice
 }
 
 // TODO: Implement a securemem.Clone() that generates a copy of a *securemem.ByteSlice
-func tokenize(input securemem.ByteSlice) ([]Token, error) {
+func tokenize(input *securemem.ByteSlice) ([]Token, error) {
 	var (
 		tokens []Token // The token list that will be returned
 		token Token // the current token. Defaults to ARG and an empty Value buffer
@@ -60,7 +60,7 @@ func tokenize(input securemem.ByteSlice) ([]Token, error) {
 			tokens = append(tokens, token) // append the token
 
 			token.Type = ARG // reset the token type
-			token.Value = securemem.ByteSlice{} // reset the value field
+			token.Value = &securemem.ByteSlice{} // reset the value field
 			scratch.Reset() // reset the scratch
 		}
 	}

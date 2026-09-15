@@ -213,7 +213,7 @@ func main() {
 
 	default:
 		// go strings are immutable and os.Args are go strings. We cannot zero them out or deallocate.
-		var byteArgs = make([]securemem.ByteSlice, 0, len(os.Args[1:]))
+		var byteArgs = make([]*securemem.ByteSlice, 0, len(os.Args[1:]))
 		for i:=1; i < len(os.Args); i++ {
 			byteArgs = append(byteArgs, securemem.ToByteSlice([]byte(os.Args[i])))
 		}
@@ -358,7 +358,7 @@ var placeholderRegex = regexp.MustCompile(`\{\d+\}`) // Used to replace the plac
 
 // Process command processes the given command and return the stdout
 // Outputs will contain an extra newline character at the end
-func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args []securemem.ByteSlice) (error) {
+func processCommand(sess *core.Session, stdin io.Reader, stdout io.Writer, args []*securemem.ByteSlice) (error) {
 	isOneshot := false
 
 	// If no session exists, create one.
@@ -786,8 +786,8 @@ func getVaultPath() string {
 
 // get the arguments from passed positional arguments and stdin. Give error if it's not enough to create args in requiredCount.
 // Ask for user input if given arguments does not match the required count while ask is true
-func getArgs(requiredCount int, givenargs []securemem.ByteSlice, stdin io.Reader, ask bool,
-) (totalargs []securemem.ByteSlice, err error) {
+func getArgs(requiredCount int, givenargs []*securemem.ByteSlice, stdin io.Reader, ask bool,
+) (totalargs []*securemem.ByteSlice, err error) {
 
 	for _,arg := range givenargs {
 		totalargs = append(totalargs, arg)
@@ -862,8 +862,8 @@ func getArgs(requiredCount int, givenargs []securemem.ByteSlice, stdin io.Reader
 
 ////////////////////////////////////////////////////////
 
-func processAllSubstitutions(sess *core.Session, tokens []Token) ([]securemem.ByteSlice, error) {
-	var expanded []securemem.ByteSlice
+func processAllSubstitutions(sess *core.Session, tokens []Token) ([]*securemem.ByteSlice, error) {
+	var expanded []*securemem.ByteSlice
 
 	for _,token := range tokens {
 		exp, err := processSubstitution(sess, token)
@@ -874,17 +874,17 @@ func processAllSubstitutions(sess *core.Session, tokens []Token) ([]securemem.By
 }
 
 // Get the substitution token, tokenize it's value, process the pipeline and return the value
-func processSubstitution(sess *core.Session, input Token) (securemem.ByteSlice, error) {
+func processSubstitution(sess *core.Session, input Token) (*securemem.ByteSlice, error) {
 	if input.Type == SUBSTITUTION {
 
 		cmdArgs,err := tokenize(input.Value)
 		// deallocate the tokens after usage
 		defer func(){ for _,arg := range cmdArgs { arg.Value.Dealloc() } }()
-		if err != nil {return securemem.ByteSlice{}, err}
+		if err != nil {return &securemem.ByteSlice{Dealloc:func()error{return nil}}, err}
 
 		var buf = &securemem.Buffer{}
 		err = processPipeline(sess, cmdArgs, bytes.NewReader(nil), buf, false)
-		if err != nil { return securemem.ByteSlice{}, err }
+		if err != nil { return &securemem.ByteSlice{Dealloc:func()error{return nil}}, err }
 
 		return buf.Bytes(),nil
 
@@ -896,17 +896,14 @@ func processSubstitution(sess *core.Session, input Token) (securemem.ByteSlice, 
 type Completer struct { sess *core.Session }
 
 // Do implements the readline.AutoCompleter interface
-func (v *Completer) Get(line securemem.ByteSlice, pos int) (completionOpts [][]byte) {
+func (v *Completer) Get(line *securemem.ByteSlice, pos int) (completionOpts [][]byte, deleteChars int) {
 	lineStr := string(line.Bytes[:pos]) // Get the everything until the cursor
 	
-	// Handle empty or whitespace-only input
-	if strings.TrimSpace(lineStr) == "" { return nil }
-
 	// Split by space to figure out if we are completing a command or a path
 	args := strings.Split(lineStr, " ")
 
-	// If we are typing the first word, complete the command itself
-	if len(args) == 1 {
+	// If we are typing the first word, complete the command itself (lineStr is the entire argument)
+	if len(args) <= 1 {
 		cmds := []string{
 			"help", "exit",
 			"put", "mput", "get", "rm", "update", "mtime",
@@ -915,18 +912,18 @@ func (v *Completer) Get(line securemem.ByteSlice, pos int) (completionOpts [][]b
 		}
 		for _, cmd := range cmds {
 			if strings.HasPrefix(cmd, lineStr) {
-				// Append the remaining string for completion of the current types string
-				completionOpts = append(completionOpts, []byte(strings.TrimPrefix(cmd, lineStr)))
+				// Append the command to the completionOpts
+				completionOpts = append(completionOpts, []byte(cmd))
 			}
 		}
 		// Return the completion options
-		return completionOpts
+		return completionOpts, len(lineStr) // delete lineStr and replace them with completionOpts
 	}
 
 	// If there are more than one argument, we are typing arguments of the command (file/folder paths)
 
 	cmd := args[0]
-	lastArg := args[len(args)-1]
+	lastArg := args[len(args)-1] // the argument we gonna replace. It's not the last argument in the whole line but the last argument of the line until the cursor
 
 	dirsOnly := false
 	switch cmd {
@@ -938,44 +935,60 @@ func (v *Completer) Get(line securemem.ByteSlice, pos int) (completionOpts [][]b
 	default: dirsOnly = false
 	}
 
-	// Fetch dynamic completions
-	results := v.getCompletions(lastArg, dirsOnly)
-	
-	// Filter results to only those that match what we typed and return the remaining possibilities
-	for _, res := range results {
-		if strings.HasPrefix(res, lastArg) {
-			completionOpts = append(completionOpts, []byte(strings.TrimPrefix(res, lastArg)))
-		}
+	// Fetch dynamic completions. This will get results in path
+	// we should delete only the entry part after the last slash
+	completionOpts = v.getCompletions(lastArg, dirsOnly)
+
+	partToDelete := 0
+	lastSlashIdx := strings.LastIndex(lastArg, "/")
+	// if slash exists and there are chars after the last slash 
+	if lastSlashIdx != -1 && lastSlashIdx+1 < len(lastArg) {
+		partToDelete = len(lastArg[lastSlashIdx+1:])
+	// if slash does not exists, delete everything
+	} else if lastSlashIdx == -1 {
+		partToDelete = len(lastArg)
 	}
 
 	// Return the completion possibilities
-	return completionOpts
+	return completionOpts, partToDelete
 }
 
-func (v *Completer) getCompletions(line string, dirsOnly bool) []string {
+func (v *Completer) getCompletions(arg string, dirsOnly bool) [][]byte {
 	dirPath := ""
+	prefixInDir := "" // the entry or dir's prefix in the dirsPath. Like foo in /dir/foo
 	
 	// Extract the directory portion of the string
-	if idx := strings.LastIndex(line, "/"); idx != -1 {
-		dirPath = line[:idx]
+	idx := strings.LastIndex(arg, "/");
+	if idx != -1 {
+		dirPath = arg[:idx]
+		if idx+1 < len(arg) { prefixInDir = arg[idx+1:] }
 		if dirPath == "" { dirPath = "/"  } // For absolute paths (like typing "/folder")
-	}
 
+	// if there is no slash, make the argument prefixInDir
+	} else { prefixInDir = arg }
+
+	// get everything in the dir
 	dirs, entries, err := v.sess.Ls(dirPath)
 	if err != nil { return nil }
 
-	var results []string
-	prefix := dirPath
-	if prefix != "" && prefix != "/" {
-		prefix += "/"
-	} else if prefix == "/" { prefix = "/" }
+	var results [][]byte
 
 	// Add subdirectories (always append trailing slash so we can keep pressing TAB)
-	for _, d := range dirs { results = append(results, prefix+d+"/") }
+	for _, d := range dirs {
+		// only append if dir has prefixInDir as prefix
+		if strings.HasPrefix(d, prefixInDir) {
+			results = append(results,[]byte(d+"/"))
+		}
+	}
 
 	// Add files if not restricted to directories
 	if !dirsOnly {
-		for _, e := range entries { results = append(results, prefix+e) }
+		for _, e := range entries {
+			// only append if entry has prefixInDir as prefix
+			if strings.HasPrefix(e, prefixInDir) {
+				results = append(results, []byte(e))
+			}
+		}
 	}
 	
 	return results

@@ -3,7 +3,6 @@ module github.com/zenarvus/sec2m-go
 go 1.26.3
 
 require (
-	github.com/chzyer/readline v1.5.1
 	github.com/zenarvus/compack/go v0.0.0-20260720140143-bb902f5a040a
 	github.com/zenarvus/polyformats/polysha/go v0.0.0-20260824095009-2a5802efcab5
 	golang.org/x/crypto v0.55.0
